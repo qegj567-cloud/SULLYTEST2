@@ -24,7 +24,7 @@ export const extractWritingTags = (char: CharacterProfile): string[] => {
 
     const tags = new Set<string>();
     const desc = ((char.description || '') + (char.worldview || '')).toLowerCase();
-    
+
     // 1. 从 impression 提取（如果有）
     if (char.impression) {
         const traits = char.impression.personality_core?.observed_traits || [];
@@ -60,7 +60,7 @@ export const extractWritingTags = (char: CharacterProfile): string[] => {
         if (likes.some(l => l.includes('美') || l.includes('艺术'))) tags.add('唯美');
         if (dislikes.some(d => d.includes('虚伪'))) tags.add('犀利直白');
     }
-    
+
     // 2. 从描述提取（无论有没有 impression）
     const descMap: Record<string, string[]> = {
         '古风': ['古韵', '半文白'], '武侠': ['快意', '古韵'],
@@ -94,7 +94,7 @@ export const extractWritingTags = (char: CharacterProfile): string[] => {
         const seed = (char.name?.charCodeAt(0) || 0) % defaults.length;
         result = [defaults[seed], defaults[(seed + 2) % defaults.length]];
     }
-    
+
     // 稳定排序：基于角色名 + 标签名生成固定顺序，避免每次渲染都变化
     const hash = (str: string) => {
         let h = 0;
@@ -105,7 +105,7 @@ export const extractWritingTags = (char: CharacterProfile): string[] => {
         return h;
     };
     const seed = hash(char.name || 'default');
-    
+
     return result
         .sort((a, b) => {
             const hashA = hash(a + seed.toString());
@@ -117,12 +117,12 @@ export const extractWritingTags = (char: CharacterProfile): string[] => {
 
 // --- Helper: Writer Persona Analysis (Simple) ---
 export const analyzeWriterPersonaSimple = (char: CharacterProfile): string => {
-    if (!char) return "未知风格"; 
-    
+    if (!char) return "未知风格";
+
     const traits = char.impression?.personality_core.observed_traits || [];
     const mbti = char.impression?.mbti_analysis?.type || '';
     const desc = char.description || '';
-    
+
     const personaMap: Record<string, any> = {
         '冷漠': { focus: '逻辑漏洞、战术细节', style: '简洁、克制，避免情感渲染', rhythm: '快节奏，少废话', taboo: '煽情、过度心理描写' },
         '高冷': { focus: '逻辑漏洞、战术细节', style: '简洁、克制，避免情感渲染', rhythm: '快节奏，少废话', taboo: '煽情、过度心理描写' },
@@ -146,7 +146,7 @@ export const analyzeWriterPersonaSimple = (char: CharacterProfile): string => {
         else if (matchedTrait.includes('柔') || matchedTrait.includes('感')) matchedTrait = '感性';
         else matchedTrait = '理性';
     }
-    
+
     let persona = personaMap[matchedTrait] || personaMap['理性'];
 
     const mbtiMap: Record<string, string> = {
@@ -190,9 +190,9 @@ export const analyzeWriterPersonaSimple = (char: CharacterProfile): string => {
 export const extractWritingTaboos = (char: CharacterProfile): string => {
     const traits = char.impression?.personality_core.observed_traits || [];
     const dislikes = char.impression?.value_map.dislikes || [];
-    
+
     let taboos = `## ${char.name} 的写作禁区（你必须遵守）：\n`;
-    
+
     // 根据性格生成禁忌
     if (traits.some(t => t.includes('冷') || t.includes('高冷') || t.includes('理性'))) {
         taboos += `
@@ -227,7 +227,7 @@ export const extractWritingTaboos = (char: CharacterProfile): string => {
 - 节奏：稳定推进，像纪录片。
 `;
     }
-    
+
     // 根据厌恶的事物追加禁忌
     if (dislikes.length > 0) {
         taboos += `\n### 额外禁忌（基于你的价值观）：\n`;
@@ -235,7 +235,7 @@ export const extractWritingTaboos = (char: CharacterProfile): string => {
             taboos += `- 如果剧情涉及"${d}"，你会下意识回避细节描写，或者表达出厌恶。\n`;
         });
     }
-    
+
     // 特殊人格追加
     if (char.description?.includes('猫') || traits.includes('猫')) {
         taboos += `\n### 🐱 猫属性强制规则：\n`;
@@ -244,7 +244,7 @@ export const extractWritingTaboos = (char: CharacterProfile): string => {
         taboos += `- 吐槽时必须带"喵"。\n`;
         taboos += `- 禁止写出人类式的长篇大论。\n`;
     }
-    
+
     return taboos;
 };
 
@@ -264,7 +264,7 @@ export const generateWriterPersonaDeep = async (
             return char.writerPersona;
         }
     }
-    
+
     const analysisPrompt = `你是一位人物心理分析专家和写作教练。我会给你一个虚拟角色的完整档案，以及与他/她互动的用户档案。请你深入理解这个角色，然后告诉我：
 
 **如果这个角色本人来写小说，他/她会有什么样的创作风格？**
@@ -390,9 +390,9 @@ ${char.memories?.slice(-3).map(m => `- ${m.summary}`).join('\n') || '- 无记忆
     try {
         const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json', 
-                'Authorization': `Bearer ${apiConfig.apiKey}` 
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiConfig.apiKey}`
             },
             body: JSON.stringify({
                 model: apiConfig.model,
@@ -401,11 +401,11 @@ ${char.memories?.slice(-3).map(m => `- ${m.summary}`).join('\n') || '- 无记忆
                 max_tokens: 8000
             })
         });
-        
+
         if (response.ok) {
             const data = await safeResponseJson(response);
             const rawPersona = data.choices[0].message.content.trim();
-            
+
             const formattedPersona = `
 ### ${char.name} 的创作人格档案（AI深度分析）
 
@@ -414,12 +414,12 @@ ${rawPersona}
 ---
 *分析生成于: ${new Date().toLocaleDateString('zh-CN')}*
 `.trim();
-            
-            updateCharacter(char.id, { 
+
+            updateCharacter(char.id, {
                 writerPersona: formattedPersona,
                 writerPersonaGeneratedAt: Date.now()
             });
-            
+
             return formattedPersona;
         } else {
             throw new Error(`API Error: ${response.status}`);
@@ -432,7 +432,7 @@ ${rawPersona}
 
 export const getFewShotExamples = (char: CharacterProfile) => {
     const traits = char.impression?.personality_core.observed_traits || [];
-    let trait = traits.find(t => ['冷漠','高冷','感性','温柔','乐天','活泼','中二','电波'].some(k => t.includes(k))) || '理性';
+    let trait = traits.find(t => ['冷漠', '高冷', '感性', '温柔', '乐天', '活泼', '中二', '电波'].some(k => t.includes(k))) || '理性';
     if (trait.includes('冷')) trait = '冷漠';
     if (trait.includes('柔') || trait.includes('感')) trait = '感性';
     if (trait.includes('乐') || trait.includes('活')) trait = '乐天';
@@ -476,10 +476,10 @@ export const getFewShotExamples = (char: CharacterProfile) => {
 
 // --- Prompt Builder ---
 export const buildPrompt = (
-    char: CharacterProfile, 
+    char: CharacterProfile,
     userProfile: UserProfile,
     activeBook: NovelBook | null,
-    userText: string, 
+    userText: string,
     storyContext: string,
     options: GenerationOptions,
     contextSegments: NovelSegment[],
@@ -488,16 +488,16 @@ export const buildPrompt = (
     const coreContext = ContextBuilder.buildCoreContext(char, userProfile, true);
     const writerPersona = char.writerPersona || analyzeWriterPersonaSimple(char);
     const fewShot = getFewShotExamples(char);
-    const extractedTaboos = extractWritingTaboos(char); 
+    const extractedTaboos = extractWritingTaboos(char);
     const protagonistContext = activeBook?.protagonists.map(p => `- ${p.name} (${p.role}): ${p.description}`).join('\n') || '无';
-    
+
     const bookInfo = `
 小说：《${activeBook?.title}》
 世界观：${activeBook?.worldSetting}
 主要角色：
 ${protagonistContext}
 `;
-    
+
     const systemPrompt = `
 ${coreContext}
 
@@ -591,12 +591,12 @@ ${userText || '[用户未输入，请根据上文自然续写]'}
 
     if (options.comment) {
         const recentOtherAuthors = contextSegments
-        .slice(-5)
-        .filter(s => s.authorId !== 'user' && s.authorId !== char.id && (s.role === 'writer' || s.type === 'story'))
-        .map(s => {
-            const author = characters.find(c => c.id === s.authorId);
-            return { name: author?.name || 'Unknown', content: s.content.substring(0, 100) };
-        });
+            .slice(-5)
+            .filter(s => s.authorId !== 'user' && s.authorId !== char.id && (s.role === 'writer' || s.type === 'story'))
+            .map(s => {
+                const author = characters.find(c => c.id === s.authorId);
+                return { name: author?.name || 'Unknown', content: s.content.substring(0, 100) };
+            });
 
         tasks += `
 3. **吐槽/感想 (带互动)**: 
@@ -640,34 +640,34 @@ export const parsePersonaMarkdown = (rawPersona: string) => {
         '节奏': '🎵', '关注点': '👁️', '笔触': '🖌️',
         '核心性格': '💎', '专业术语': '📚'
     };
-    
+
     const getIcon = (title: string) => {
         for (const [key, icon] of Object.entries(iconMap)) {
             if (title.includes(key)) return icon;
         }
         return '📌';
     };
-    
-    const sections: {title: string, content: string[], icon: string}[] = [];
-    let currentSection: {title: string, content: string[], icon: string} | null = null;
+
+    const sections: { title: string, content: string[], icon: string }[] = [];
+    let currentSection: { title: string, content: string[], icon: string } | null = null;
 
     lines.forEach(line => {
         const trimmed = line.trim();
         if (!trimmed) return;
-        
-        const headerMatch = trimmed.match(/^###\s*(.+)/) || 
-                           trimmed.match(/^\*\*([^*]+)\*\*\s*[:：]\s*(.*)/) ||
-                           trimmed.match(/^([^-•\d][^:：]{1,15})[:：]\s*(.*)/);
-        
+
+        const headerMatch = trimmed.match(/^###\s*(.+)/) ||
+            trimmed.match(/^\*\*([^*]+)\*\*\s*[:：]\s*(.*)/) ||
+            trimmed.match(/^([^-•\d][^:：]{1,15})[:：]\s*(.*)/);
+
         if (headerMatch) {
             if (currentSection && currentSection.content.length > 0) {
                 sections.push(currentSection);
             }
             const title = (headerMatch[1] || '').replace(/\*\*/g, '').trim();
-            currentSection = { 
+            currentSection = {
                 title: title,
                 icon: getIcon(title),
-                content: [] 
+                content: []
             };
             const afterColon = headerMatch[2]?.trim();
             if (afterColon) {
@@ -680,10 +680,13 @@ export const parsePersonaMarkdown = (rawPersona: string) => {
             }
         }
     });
-    
-    if (currentSection && currentSection.content.length > 0) {
-        sections.push(currentSection);
+
+    // TS can't track mutations through forEach callbacks, so currentSection is narrowed to `never` here.
+    // Use explicit cast to the known section type.
+    const finalSection = currentSection as { title: string; content: string[]; icon: string } | null;
+    if (finalSection && finalSection.content.length > 0) {
+        sections.push(finalSection);
     }
-    
+
     return sections;
 };

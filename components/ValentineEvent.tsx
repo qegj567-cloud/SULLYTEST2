@@ -12,6 +12,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
+import { useVirtualTime } from '../context/VirtualTimeContext';
 import { DB } from '../utils/db';
 import { ContextBuilder } from '../utils/context';
 import { safeResponseJson } from '../utils/safeApi';
@@ -24,12 +25,12 @@ import { Share } from '@capacitor/share';
 // 情人节立绘 Sprite 映射 (占位 emoji，等图片整理好后替换为图床URL)
 // ============================================================
 const VALENTINE_SPRITES: Record<string, string> = {
-    happy:   'https://sharkpan.xyz/f/m3adhW/Vha.png',
-    sad:     'https://sharkpan.xyz/f/BZgDfa/Vsad.png',
-    normal:  'https://sharkpan.xyz/f/4rzdtj/VNormal.png',
-    angry:   'https://sharkpan.xyz/f/NdlVfv/VAn.png',
-    shy:     'https://sharkpan.xyz/f/VyontY/Vshy.png',
-    love:    'https://sharkpan.xyz/f/xl8muX/VBl.png',
+    happy: 'https://sharkpan.xyz/f/m3adhW/Vha.png',
+    sad: 'https://sharkpan.xyz/f/BZgDfa/Vsad.png',
+    normal: 'https://sharkpan.xyz/f/4rzdtj/VNormal.png',
+    angry: 'https://sharkpan.xyz/f/NdlVfv/VAn.png',
+    shy: 'https://sharkpan.xyz/f/VyontY/Vshy.png',
+    love: 'https://sharkpan.xyz/f/xl8muX/VBl.png',
 };
 
 // localStorage keys
@@ -328,7 +329,8 @@ interface ValentineSessionProps {
 }
 
 export const ValentineSession: React.FC<ValentineSessionProps> = ({ charId, onClose }) => {
-    const { characters, activeCharacterId, apiConfig, userProfile, addToast, virtualTime, updateCharacter } = useOS();
+    const { characters, activeCharacterId, apiConfig, userProfile, addToast, updateCharacter } = useOS();
+    const virtualTime = useVirtualTime();
 
     // 角色选择
     const [selectedCharId, setSelectedCharId] = useState<string>(charId || activeCharacterId || '');
@@ -650,6 +652,7 @@ export const ValentineSession: React.FC<ValentineSessionProps> = ({ charId, onCl
         if (!recordRef.current || isExporting) return;
         setIsExporting(true);
         try {
+            // @ts-ignore — runtime CDN import, no type declarations available
             const mod: any = await import('https://esm.sh/html2canvas@1.4.1');
             const html2canvas = mod.default;
             const canvas = await html2canvas(recordRef.current, {

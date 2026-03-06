@@ -16,14 +16,14 @@ import { ContextBuilder } from '../utils/context';
 const INITIAL_STATE: BankFullState = {
     config: {
         dailyBudget: 100,
-        currencySymbol: '¥', 
+        currencySymbol: '¥',
     },
     shop: {
         actionPoints: 100,
         shopName: '咖啡馆',
         shopLevel: 1,
         appeal: 100,
-        background: 'https://sharkpan.xyz/f/5n1gSj/bg.png', 
+        background: 'https://sharkpan.xyz/f/5n1gSj/bg.png',
         staff: [
             {
                 id: 'staff-001',
@@ -59,19 +59,19 @@ const BankApp: React.FC = () => {
     // so we can't rely on setState's updater callback running before DB.save)
     const stateRef = useRef<BankFullState>(INITIAL_STATE);
     const dollhouseRef = useRef<DollhouseState>(INITIAL_DOLLHOUSE);
-    
+
     // Tabs: 'game' (Shop) | 'manage' (Menu) | 'report' (Finance)
     const [activeTab, setActiveTab] = useState<'game' | 'manage' | 'report'>('game');
-    
+
     // UI Modals
     const [showAddTxModal, setShowAddTxModal] = useState(false);
     const [showGoalModal, setShowGoalModal] = useState(false);
     const [showTutorial, setShowTutorial] = useState(false);
     const [showStaffEdit, setShowStaffEdit] = useState(false);
-    
+
     // Guestbook Fullscreen State (Changed from Modal)
     const [showGuestbook, setShowGuestbook] = useState(false);
-    
+
     // Forms
     const [txAmount, setTxAmount] = useState('');
     const [txNote, setTxNote] = useState('');
@@ -111,14 +111,13 @@ const BankApp: React.FC = () => {
         return nextState;
     };
 
-    const persistDollhouseUpdate = async (updater: DollhouseState | ((prev: DollhouseState) => DollhouseState)): Promise<DollhouseState> => {
+    const persistDollhouseUpdate = async (updater: DollhouseState | ((prev: DollhouseState) => DollhouseState)): Promise<void> => {
         const nextDollhouse = typeof updater === 'function'
             ? (updater as (prev: DollhouseState) => DollhouseState)(dollhouseRef.current)
             : updater;
         dollhouseRef.current = nextDollhouse;
         setDollhouseState(nextDollhouse);
         await DB.saveBankDollhouse(nextDollhouse);
-        return nextDollhouse;
     };
 
     const loadData = async () => {
@@ -286,7 +285,7 @@ const BankApp: React.FC = () => {
         const finalState = { ...currentState, todaySpent: spent, shop: { ...currentState.shop, appeal } };
         stateRef.current = finalState;
         setState(finalState);
-        setTransactions(txs.sort((a,b) => b.timestamp - a.timestamp));
+        setTransactions(txs.sort((a, b) => b.timestamp - a.timestamp));
 
         // Always persist after load to ensure migrations are saved
         await DB.saveBankState(finalState);
@@ -303,10 +302,10 @@ const BankApp: React.FC = () => {
             addToast('请填写金额和内容哦', 'error');
             return;
         }
-        
+
         const amount = parseFloat(txAmount);
         const today = new Date().toISOString().split('T')[0];
-        
+
         const newTx: BankTransaction = {
             id: `tx-${Date.now()}`,
             amount,
@@ -315,9 +314,9 @@ const BankApp: React.FC = () => {
             timestamp: Date.now(),
             dateStr: today
         };
-        
+
         await DB.saveTransaction(newTx);
-        
+
         const cur = stateRef.current;
         const newSpent = cur.todaySpent + amount;
         const newState = { ...cur, todaySpent: newSpent };
@@ -574,6 +573,7 @@ ${previousGuestbook}
                                 role: 'system',
                                 type: 'text',
                                 content: `[系统: ${entry.authorName} 拜访了${userProfile.name}的记账App咖啡馆，并表示："${entry.content}"]`,
+                                metadata: { source: 'bank', bankEvent: 'guestbook' }
                             });
                             entry.systemMessageId = msgId;
                         } catch (e) {
@@ -739,7 +739,7 @@ ${previousGuestbook}
 
             {/* Premium Header */}
             <div className="pt-[calc(env(safe-area-inset-top)+1.5rem)] pb-3 px-4 sticky top-0 z-[50] shrink-0"
-                 style={{ background: 'linear-gradient(180deg, rgba(141, 110, 99, 0.95) 0%, rgba(109, 76, 65, 0.95) 100%)', backdropFilter: 'blur(10px)' }}>
+                style={{ background: 'linear-gradient(180deg, rgba(141, 110, 99, 0.95) 0%, rgba(109, 76, 65, 0.95) 100%)', backdropFilter: 'blur(10px)' }}>
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <button
@@ -778,26 +778,26 @@ ${previousGuestbook}
 
             {/* Main Content Area */}
             <div className="flex-1 overflow-hidden relative z-10 flex flex-col">
-                
+
                 {/* 1. Game View (Dollhouse) */}
                 {activeTab === 'game' && (
                     isBankDataLoaded ? (
-                    <BankDollhouse
-                        shopState={state.shop}
-                        dollhouseState={dollhouseState}
-                        onDollhouseChange={persistDollhouseUpdate}
-                        characters={characters}
-                        userProfile={userProfile}
-                        apiConfig={apiConfig}
-                        updateState={async (updater) => {
-                            const nextState = { ...stateRef.current, shop: updater(stateRef.current.shop) };
-                            stateRef.current = nextState;
-                            setState(nextState);
-                            await DB.saveBankState(nextState);
-                        }}
-                        onStaffClick={handleOpenStaffEdit}
-                        onOpenGuestbook={() => setShowGuestbook(true)}
-                    />
+                        <BankDollhouse
+                            shopState={state.shop}
+                            dollhouseState={dollhouseState}
+                            onDollhouseChange={persistDollhouseUpdate}
+                            characters={characters}
+                            userProfile={userProfile}
+                            apiConfig={apiConfig}
+                            updateState={async (updater) => {
+                                const nextState = { ...stateRef.current, shop: updater(stateRef.current.shop) };
+                                stateRef.current = nextState;
+                                setState(nextState);
+                                await DB.saveBankState(nextState);
+                            }}
+                            onStaffClick={handleOpenStaffEdit}
+                            onOpenGuestbook={() => setShowGuestbook(true)}
+                        />
                     ) : (
                         <div className="flex-1 flex items-center justify-center text-sm text-[#8A5A3D]">加载咖啡店中...</div>
                     )
@@ -814,9 +814,9 @@ ${previousGuestbook}
                             </div>
                             <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-200">
                                 <span className="text-xs text-slate-400">{state.config.currencySymbol}</span>
-                                <input 
-                                    type="number" 
-                                    value={state.config.dailyBudget} 
+                                <input
+                                    type="number"
+                                    value={state.config.dailyBudget}
                                     onChange={(e) => {
                                         const value = e.target.value;
                                         if (value === '') return;
@@ -869,7 +869,7 @@ ${previousGuestbook}
                 <div className="absolute inset-0 z-[100] flex flex-col animate-slide-up" style={{ background: 'linear-gradient(180deg, #FDF6E3 0%, #FFF8E1 100%)' }}>
                     {/* Header */}
                     <div className="pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 px-4 shrink-0"
-                         style={{ background: 'linear-gradient(180deg, rgba(141, 110, 99, 0.95) 0%, rgba(109, 76, 65, 0.95) 100%)', backdropFilter: 'blur(10px)' }}>
+                        style={{ background: 'linear-gradient(180deg, rgba(141, 110, 99, 0.95) 0%, rgba(109, 76, 65, 0.95) 100%)', backdropFilter: 'blur(10px)' }}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 bg-white/15 rounded-xl flex items-center justify-center">
@@ -906,11 +906,10 @@ ${previousGuestbook}
                             <button
                                 onClick={handleRefreshGuestbook}
                                 disabled={isRefreshingGuestbook}
-                                className={`px-5 py-3 rounded-xl font-bold text-xs shadow-lg transition-all ${
-                                    isRefreshingGuestbook
-                                        ? 'bg-[#EFEBE9] text-[#BCAAA4]'
-                                        : 'bg-gradient-to-r from-[#42A5F5] to-[#1E88E5] text-white hover:shadow-xl active:scale-95'
-                                }`}
+                                className={`px-5 py-3 rounded-xl font-bold text-xs shadow-lg transition-all ${isRefreshingGuestbook
+                                    ? 'bg-[#EFEBE9] text-[#BCAAA4]'
+                                    : 'bg-gradient-to-r from-[#42A5F5] to-[#1E88E5] text-white hover:shadow-xl active:scale-95'
+                                    }`}
                             >
                                 {isRefreshingGuestbook ? (
                                     <span className="flex items-center gap-2">
@@ -932,11 +931,10 @@ ${previousGuestbook}
                                 {state.shop.guestbook.map((msg, idx) => (
                                     <div
                                         key={msg.id}
-                                        className={`relative p-4 rounded-2xl group animate-fade-in transition-all hover:shadow-md ${
-                                            msg.isChar
-                                                ? 'bg-white border-l-4 border-l-[#FF7043] shadow-md'
-                                                : 'bg-[#FDF6E3] border border-[#E8DCC8]'
-                                        }`}
+                                        className={`relative p-4 rounded-2xl group animate-fade-in transition-all hover:shadow-md ${msg.isChar
+                                            ? 'bg-white border-l-4 border-l-[#FF7043] shadow-md'
+                                            : 'bg-[#FDF6E3] border border-[#E8DCC8]'
+                                            }`}
                                     >
                                         <div className="flex justify-between items-start mb-2">
                                             <div className="flex items-center gap-2">
@@ -947,7 +945,7 @@ ${previousGuestbook}
                                                     {msg.authorName}
                                                 </span>
                                                 <span className="text-[9px] text-[#BCAAA4] bg-[#EFEBE9] px-2 py-0.5 rounded-full">
-                                                    {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-1.5">
@@ -995,11 +993,10 @@ ${previousGuestbook}
                         <button
                             key={tab.key}
                             onClick={() => setActiveTab(tab.key as any)}
-                            className={`flex-1 flex flex-col items-center justify-center py-2.5 rounded-xl transition-all duration-300 ${
-                                activeTab === tab.key
-                                    ? 'bg-gradient-to-br from-[#8D6E63] to-[#6D4C41] shadow-lg scale-105'
-                                    : 'hover:bg-[#FDF6E3]'
-                            }`}
+                            className={`flex-1 flex flex-col items-center justify-center py-2.5 rounded-xl transition-all duration-300 ${activeTab === tab.key
+                                ? 'bg-gradient-to-br from-[#8D6E63] to-[#6D4C41] shadow-lg scale-105'
+                                : 'hover:bg-[#FDF6E3]'
+                                }`}
                         >
                             <span className={`text-xl mb-0.5 ${activeTab === tab.key ? 'transform scale-110' : ''}`}>{tab.icon}</span>
                             <span className={`text-[10px] font-bold tracking-wide ${activeTab === tab.key ? 'text-white' : 'text-[#A1887F]'}`}>
@@ -1101,7 +1098,7 @@ ${previousGuestbook}
                             <div className="flex-1 space-y-3">
                                 <input
                                     value={editingStaff.name}
-                                    onChange={e => setEditingStaff({...editingStaff, name: e.target.value})}
+                                    onChange={e => setEditingStaff({ ...editingStaff, name: e.target.value })}
                                     className="w-full font-bold text-xl bg-transparent border-b-2 border-[#E8DCC8] focus:border-[#42A5F5] outline-none text-[#5D4037] pb-1"
                                     placeholder="姓名"
                                 />
@@ -1114,7 +1111,7 @@ ${previousGuestbook}
                             <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">性格 / 备注</label>
                             <input
                                 value={editingStaff.personality || ''}
-                                onChange={e => setEditingStaff({...editingStaff, personality: e.target.value})}
+                                onChange={e => setEditingStaff({ ...editingStaff, personality: e.target.value })}
                                 className="w-full bg-[#FDF6E3] border-2 border-[#E8DCC8] rounded-2xl px-4 py-3 text-sm text-[#5D4037] focus:border-[#42A5F5] outline-none transition-colors"
                                 placeholder="懒洋洋的，喜欢晒太阳 ☀️"
                             />
@@ -1145,8 +1142,8 @@ ${previousGuestbook}
                         <div>
                             <div className="font-bold text-base mb-1">互动操作</div>
                             <p className="text-xs text-[#5C6BC0] leading-relaxed">
-                                • 点击情报志可查看和刷新八卦<br/>
-                                • 点击地板可以让店长走过去<br/>
+                                • 点击情报志可查看和刷新八卦<br />
+                                • 点击地板可以让店长走过去<br />
                                 • 点击🛎️按钮邀请角色进店
                             </p>
                         </div>

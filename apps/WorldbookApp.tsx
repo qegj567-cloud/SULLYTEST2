@@ -5,7 +5,7 @@ import Modal from '../components/os/Modal';
 
 const WorldbookApp: React.FC = () => {
     const { closeApp, worldbooks, addWorldbook, updateWorldbook, deleteWorldbook, addToast } = useOS();
-    
+
     // View State
     const [isEditing, setIsEditing] = useState(false);
     const [editingBook, setEditingBook] = useState<Worldbook | null>(null);
@@ -16,32 +16,34 @@ const WorldbookApp: React.FC = () => {
     const [tempTitle, setTempTitle] = useState('');
     const [tempContent, setTempContent] = useState('');
     const [tempCategory, setTempCategory] = useState('');
+    const [tempPosition, setTempPosition] = useState<'top' | 'after_worldview' | 'after_impression' | 'bottom'>('after_worldview');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     // Grouping Logic
     const groupedBooks = useMemo(() => {
         const groups: Record<string, Worldbook[]> = {};
         const defaultCat = '未分类设定 (General)';
-        
+
         worldbooks.forEach(wb => {
             const cat = wb.category || defaultCat;
             if (!groups[cat]) groups[cat] = [];
             groups[cat].push(wb);
         });
-        
+
         // Auto-expand the first category if none selected and groups exist
         if (!expandedCategory && Object.keys(groups).length > 0) {
             // setExpandedCategory(Object.keys(groups)[0]); // Optional: Auto open first
         }
-        
+
         return groups;
     }, [worldbooks]);
 
     const handleCreate = () => {
-        setEditingBook(null); 
+        setEditingBook(null);
         setTempTitle('');
         setTempContent('');
         setTempCategory(''); // Default empty
+        setTempPosition('after_worldview');
         setIsEditing(true);
     };
 
@@ -50,6 +52,7 @@ const WorldbookApp: React.FC = () => {
         setTempTitle(book.title);
         setTempContent(book.content);
         setTempCategory(book.category || '');
+        setTempPosition(book.position || 'after_worldview');
         setIsEditing(true);
     };
 
@@ -65,7 +68,8 @@ const WorldbookApp: React.FC = () => {
             await updateWorldbook(editingBook.id, {
                 title: tempTitle,
                 content: tempContent,
-                category: category
+                category: category,
+                position: tempPosition
             });
             addToast('已保存 (同步至相关角色)', 'success');
         } else {
@@ -74,6 +78,7 @@ const WorldbookApp: React.FC = () => {
                 title: tempTitle,
                 content: tempContent,
                 category: category,
+                position: tempPosition,
                 createdAt: Date.now(),
                 updatedAt: Date.now()
             };
@@ -123,10 +128,10 @@ const WorldbookApp: React.FC = () => {
                     <div className="space-y-4">
                         <div>
                             <label className="text-xs font-bold text-slate-400 uppercase mb-2 block tracking-wider">标题 (Title)</label>
-                            <input 
+                            <input
                                 value={tempTitle}
                                 onChange={e => setTempTitle(e.target.value)}
-                                placeholder="例如: 魔法体系、公司背景..." 
+                                placeholder="例如: 魔法体系、公司背景..."
                                 className="w-full text-lg font-bold text-slate-800 bg-white border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
                             />
                         </div>
@@ -134,10 +139,10 @@ const WorldbookApp: React.FC = () => {
                         <div>
                             <label className="text-xs font-bold text-slate-400 uppercase mb-2 block tracking-wider">分组 (Group)</label>
                             <div className="relative">
-                                <input 
+                                <input
                                     value={tempCategory}
                                     onChange={e => setTempCategory(e.target.value)}
-                                    placeholder="例如: 世界观、人物、地理..." 
+                                    placeholder="例如: 世界观、人物、地理..."
                                     className="w-full text-sm text-slate-700 bg-white border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
                                     list="category-suggestions"
                                 />
@@ -151,11 +156,36 @@ const WorldbookApp: React.FC = () => {
                         </div>
 
                         <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block tracking-wider">插入位置 (Injection Position)</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                {[
+                                    { value: 'top' as const, label: '人设之前', desc: '最顶部' },
+                                    { value: 'after_worldview' as const, label: '世界观之后', desc: '默认' },
+                                    { value: 'after_impression' as const, label: '印象之后', desc: '记忆之前' },
+                                    { value: 'bottom' as const, label: '记忆之后', desc: '最底部' },
+                                ].map(opt => (
+                                    <button
+                                        key={opt.value}
+                                        type="button"
+                                        onClick={() => setTempPosition(opt.value)}
+                                        className={`px-3 py-2.5 rounded-xl border text-left transition-all ${tempPosition === opt.value
+                                                ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-100'
+                                                : 'border-slate-200 bg-white hover:border-slate-300'
+                                            }`}
+                                    >
+                                        <div className={`text-xs font-bold ${tempPosition === opt.value ? 'text-indigo-600' : 'text-slate-600'}`}>{opt.label}</div>
+                                        <div className="text-[10px] text-slate-400 mt-0.5">{opt.desc}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div>
                             <label className="text-xs font-bold text-slate-400 uppercase mb-2 block tracking-wider">设定内容 (Content)</label>
-                            <textarea 
+                            <textarea
                                 value={tempContent}
                                 onChange={e => setTempContent(e.target.value)}
-                                placeholder="在此输入详细的设定内容，支持 Markdown 格式..." 
+                                placeholder="在此输入详细的设定内容，支持 Markdown 格式..."
                                 className="w-full h-80 bg-white border border-slate-200 rounded-xl p-4 text-sm text-slate-700 leading-relaxed resize-none outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all font-mono"
                             />
                         </div>
@@ -200,7 +230,7 @@ const WorldbookApp: React.FC = () => {
                 {Object.entries(groupedBooks).map(([category, books]) => (
                     <div key={category} className="animate-slide-up">
                         {/* Category Header */}
-                        <div 
+                        <div
                             onClick={() => toggleCategory(category)}
                             className="flex items-center gap-2 py-2 px-1 cursor-pointer select-none group"
                         >
@@ -216,7 +246,7 @@ const WorldbookApp: React.FC = () => {
                             {books.map(book => (
                                 <div key={book.id} className="bg-white/60 backdrop-blur-md rounded-2xl border border-white/60 shadow-sm hover:shadow-md transition-all group relative overflow-hidden">
                                     {/* Item Header */}
-                                    <div 
+                                    <div
                                         onClick={() => togglePreview(book.id)}
                                         className="p-4 cursor-pointer flex justify-between items-start"
                                     >
@@ -229,17 +259,17 @@ const WorldbookApp: React.FC = () => {
                                                 Updated: {new Date(book.updatedAt).toLocaleDateString()}
                                             </div>
                                         </div>
-                                        
+
                                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); handleEdit(book); }} 
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleEdit(book); }}
                                                 className="p-2 rounded-full hover:bg-white text-slate-400 hover:text-indigo-600 transition-colors"
                                                 title="编辑"
                                             >
                                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" /></svg>
                                             </button>
-                                            <button 
-                                                onClick={(e) => requestDelete(e, book)} 
+                                            <button
+                                                onClick={(e) => requestDelete(e, book)}
                                                 className="p-2 rounded-full hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors"
                                                 title="删除"
                                             >
@@ -265,9 +295,9 @@ const WorldbookApp: React.FC = () => {
             </div>
 
             {/* Delete Confirmation Modal */}
-            <Modal 
-                isOpen={showDeleteConfirm} 
-                title="删除确认" 
+            <Modal
+                isOpen={showDeleteConfirm}
+                title="删除确认"
                 onClose={() => setShowDeleteConfirm(false)}
                 footer={
                     <div className="flex gap-3 w-full">
@@ -282,7 +312,7 @@ const WorldbookApp: React.FC = () => {
                     </div>
                     <div>
                         确定要删除 <span className="font-bold text-slate-900">"{editingBook?.title}"</span> 吗？
-                        <br/><span className="text-xs text-red-400 opacity-80 mt-1 block">此操作无法撤销。</span>
+                        <br /><span className="text-xs text-red-400 opacity-80 mt-1 block">此操作无法撤销。</span>
                     </div>
                 </div>
             </Modal>

@@ -6,8 +6,22 @@ import { CharacterProfile, UserProfile } from '../types';
  * 负责统一构建所有 App 共用的基础角色上下文 (System Prompt)。
  * 包含：身份设定、用户画像、世界观、核心记忆、详细记忆、以及角色内心看法。
  */
+
+// 世界书渲染辅助函数（按数组顺序输出）
+type MountedWb = NonNullable<CharacterProfile['mountedWorldbooks']>[number];
+const renderWbBlock = (books: MountedWb[], label?: string): string => {
+    if (books.length === 0) return '';
+    let block = label ? `### ${label}\n` : '';
+    books.forEach(wb => {
+        const cat = wb.category || '通用设定 (General)';
+        block += `#### [${cat}] ${wb.title}\n${wb.content}\n---\n`;
+    });
+    block += `\n`;
+    return block;
+};
+
 export const ContextBuilder = {
-    
+
     /**
      * 构建核心人设上下文
      * @param char 角色档案
@@ -18,48 +32,37 @@ export const ContextBuilder = {
     buildCoreContext: (char: CharacterProfile, user: UserProfile, includeDetailedMemories: boolean = true): string => {
         let context = `[System: Roleplay Configuration]\n\n`;
 
+        // 预处理：将已挂载世界书按 position 分为 4 个区
+        const allWbs = char.mountedWorldbooks || [];
+        const wbTop = allWbs.filter(wb => wb.position === 'top');
+        const wbAfterWorldview = allWbs.filter(wb => !wb.position || wb.position === 'after_worldview');
+        const wbAfterImpression = allWbs.filter(wb => wb.position === 'after_impression');
+        const wbBottom = allWbs.filter(wb => wb.position === 'bottom');
+
+        // ====== 【区域：顶部世界书】 ======
+        context += renderWbBlock(wbTop, '扩展设定集 · 前置 (Worldbooks · Top)');
+
         // 1. 核心身份 (Identity)
         context += `### 你的身份 (Character)\n`;
         context += `- 名字: ${char.name}\n`;
-        // Change: Explicitly label description as User Note to avoid literal interpretation
         context += `- 用户备注/爱称 (User Note/Nickname): ${char.description || '无'}\n`;
-        context += `  (注意: 这个备注是用户对你的称呼或印象，可能包含比喻。如果备注内容（如“快乐小狗”）与你的核心设定冲突，请以核心设定为准，不要真的扮演成动物，除非核心设定里写了你是动物。)\n`;
+        context += `  (注意: 这个备注是用户对你的称呼或印象，可能包含比喻。如果备注内容（如"快乐小狗"）与你的核心设定冲突，请以核心设定为准，不要真的扮演成动物，除非核心设定里写了你是动物。)\n`;
         context += `- 核心性格/指令:\n${char.systemPrompt || '你是一个温柔、拟人化的AI伴侣。'}\n\n`;
 
-        // 2. 世界观 (Worldview) - New Centralized Logic
+        // 2. 世界观 (Worldview)
         if (char.worldview && char.worldview.trim()) {
             context += `### 世界观与设定 (World Settings)\n${char.worldview}\n\n`;
         }
 
-        // [NEW] 挂载的世界书 (Mounted Worldbooks) - GROUPED BY CATEGORY
-        if (char.mountedWorldbooks && char.mountedWorldbooks.length > 0) {
-            context += `### 扩展设定集 (Worldbooks)\n`;
-            
-            // Group books by category
-            const groupedBooks: Record<string, typeof char.mountedWorldbooks> = {};
-            char.mountedWorldbooks.forEach(wb => {
-                const cat = wb.category || '通用设定 (General)';
-                if (!groupedBooks[cat]) groupedBooks[cat] = [];
-                groupedBooks[cat].push(wb);
-            });
-
-            // Output grouped content
-            Object.entries(groupedBooks).forEach(([category, books]) => {
-                context += `#### [${category}]\n`;
-                books.forEach(wb => {
-                    context += `**Title: ${wb.title}**\n${wb.content}\n---\n`;
-                });
-                context += `\n`;
-            });
-        }
+        // ====== 【区域：世界观之后（默认位置）】 ======
+        context += renderWbBlock(wbAfterWorldview, '扩展设定集 (Worldbooks)');
 
         // 3. 用户画像 (User Profile)
         context += `### 互动对象 (User)\n`;
         context += `- 名字: ${user.name}\n`;
         context += `- 设定/备注: ${user.bio || '无'}\n\n`;
 
-        // 4. [NEW] 印象档案 (Private Impression)
-        // 这是角色对用户的私密看法，只有角色知道
+        // 4. 印象档案 (Private Impression)
         if (char.impression) {
             const imp = char.impression;
             context += `### [私密档案: 我眼中的${user.name}] (Private Impression)\n`;
@@ -73,6 +76,9 @@ export const ContextBuilder = {
             context += `- 最近观察到的变化: ${imp.observed_changes ? imp.observed_changes.map(c => typeof c === 'string' ? c : (c as any)?.description ? `[${(c as any).period}] ${(c as any).description}` : JSON.stringify(c)).join('; ') : '无'}\n\n`;
         }
 
+        // ====== 【区域：印象之后的世界书】 ======
+        context += renderWbBlock(wbAfterImpression, '扩展设定集 · 补充 (Worldbooks · After Impression)');
+
         // 5. 记忆库 (Memory Bank)
         context += `### 记忆系统 (Memory Bank)\n`;
         let memoryContent = "";
@@ -80,8 +86,8 @@ export const ContextBuilder = {
         // 5a. 长期核心记忆 (Refined Memories)
         if (char.refinedMemories && Object.keys(char.refinedMemories).length > 0) {
             memoryContent += `**长期核心记忆 (Key Memories)**:\n`;
-            Object.entries(char.refinedMemories).sort().forEach(([date, summary]) => { 
-                memoryContent += `- [${date}]: ${summary}\n`; 
+            Object.entries(char.refinedMemories).sort().forEach(([date, summary]) => {
+                memoryContent += `- [${date}]: ${summary}\n`;
             });
         }
 
@@ -89,27 +95,17 @@ export const ContextBuilder = {
         if (includeDetailedMemories && char.activeMemoryMonths && char.activeMemoryMonths.length > 0 && char.memories) {
             let details = "";
             char.activeMemoryMonths.forEach(monthKey => {
-                // monthKey format: YYYY-MM
-                // Robust Date Matching: Normalize memory date separators to '-' and compare prefix
-                // This ensures compatibility with 'YYYY/MM/DD', 'YYYY年MM月DD日', and 'YYYY-MM-DD'
                 const logs = char.memories.filter(m => {
-                    // 1. Replace separators / or 年 or 月 with -
-                    // 2. Remove '日'
-                    // 3. Ensure single digit months/days are padded (e.g. 2024-1-1 -> 2024-01-01) for strict matching, 
-                    //    but simplest is to just check startsWith after rough normalization.
                     let normDate = m.date.replace(/[\/年月]/g, '-').replace('日', '');
-                    
-                    // Basic fix for "2024-1-1" vs "2024-01" matching issues
                     const parts = normDate.split('-');
                     if (parts.length >= 2) {
                         const y = parts[0];
                         const mo = parts[1].padStart(2, '0');
                         normDate = `${y}-${mo}`;
                     }
-                    
                     return normDate.startsWith(monthKey);
                 });
-                
+
                 if (logs.length > 0) {
                     details += `\n> 详细回忆 [${monthKey}]:\n`;
                     logs.forEach(m => {
@@ -126,6 +122,9 @@ export const ContextBuilder = {
             memoryContent = "(暂无特定记忆，请基于当前对话互动)";
         }
         context += `${memoryContent}\n\n`;
+
+        // ====== 【区域：最底部世界书】 ======
+        context += renderWbBlock(wbBottom, '扩展设定集 · 最终指令 (Worldbooks · Bottom)');
 
         // Debug: warn about missing context sections
         const missing: string[] = [];

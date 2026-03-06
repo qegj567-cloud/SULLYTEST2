@@ -39,7 +39,7 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
     onShowCharsPanel
 }) => {
     return (
-        <div className="h-24 bg-white/80 backdrop-blur-xl px-5 flex items-end pb-4 border-b border-slate-200/60 shrink-0 z-30 sticky top-0 shadow-sm relative">
+        <div className="sully-chat-header h-24 bg-white/80 backdrop-blur-xl px-5 flex items-end pb-4 border-b border-slate-200/60 shrink-0 z-30 sticky top-0 shadow-sm relative transition-all duration-300">
             {selectionMode ? (
                 <div className="flex items-center justify-between w-full">
                     <button onClick={onCancelSelection} className="text-sm font-bold text-slate-500 px-2 py-1">取消</button>
@@ -51,7 +51,7 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
                     <button onClick={onClose} className="p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-full">
                         <CaretLeft className="w-5 h-5" weight="bold" />
                     </button>
-                    
+
                     <div onClick={onShowCharsPanel} className="flex-1 min-w-0 flex items-center gap-3 cursor-pointer">
                         <img src={activeCharacter.avatar} className="w-10 h-10 rounded-xl object-cover shadow-sm" alt="avatar" />
                         <div>
@@ -67,16 +67,16 @@ const ChatHeader: React.FC<ChatHeaderProps> = ({
                         </div>
                     </div>
 
-                    <button 
-                        onClick={onTriggerAI} 
-                        disabled={isTyping} 
+                    <button
+                        onClick={onTriggerAI}
+                        disabled={isTyping}
                         className={`p-2 rounded-full ${isTyping ? 'bg-slate-100' : 'bg-primary/10 text-primary'}`}
                     >
                         <Lightning className="w-5 h-5" weight="bold" />
                     </button>
                 </div>
             )}
-            
+
             {isSummarizing && (
                 <div className="absolute top-full left-0 w-full bg-indigo-50 border-b border-indigo-100 p-2 flex items-center justify-center gap-2">
                     <div className="w-3 h-3 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>

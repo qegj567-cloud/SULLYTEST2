@@ -19,23 +19,23 @@ interface ChatModalsProps {
     setPreserveContext: (v: boolean) => void;
     editContent: string;
     setEditContent: (v: string) => void;
-    
+
     // New Category Props
     newCategoryName: string;
     setNewCategoryName: (v: string) => void;
     onAddCategory: () => void;
 
     // Archive Props
-    archivePrompts: {id: string, name: string, content: string}[];
+    archivePrompts: { id: string, name: string, content: string }[];
     selectedPromptId: string;
     setSelectedPromptId: (id: string) => void;
-    editingPrompt: {id: string, name: string, content: string} | null;
+    editingPrompt: { id: string, name: string, content: string } | null;
     setEditingPrompt: (p: any) => void;
     isSummarizing: boolean;
 
     // Selection Props
     selectedMessage: Message | null;
-    selectedEmoji: {name: string, url: string} | null;
+    selectedEmoji: { name: string, url: string } | null;
     selectedCategory: EmojiCategory | null;
     activeCharacter: CharacterProfile;
     messages: Message[];
@@ -75,6 +75,16 @@ interface ChatModalsProps {
     // XHS toggle
     xhsEnabled?: boolean;
     onToggleXhs?: () => void;
+    // Timestamp toggle
+    showTimestampSetting?: boolean;
+    isTimestampForced?: boolean;
+    onToggleTimestamp?: () => void;
+    // Voice / TTS
+    onReadAloud?: () => void;
+    onVoiceToText?: () => void;
+    onDownloadVoice?: () => void;
+    autoTts?: boolean;
+    onToggleAutoTts?: () => void;
 }
 
 const ChatModals: React.FC<ChatModalsProps> = ({
@@ -96,7 +106,9 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     onSetHistoryStart, onEnterSelectionMode, onReplyMessage, onEditMessageStart, onConfirmEditMessage, onDeleteMessage, onCopyMessage, onDeleteEmoji, onDeleteCategory,
     allCharacters = [], onSaveCategoryVisibility,
     translationEnabled, onToggleTranslation, translateSourceLang, translateTargetLang, onSetTranslateSourceLang, onSetTranslateLang,
-    xhsEnabled, onToggleXhs
+    xhsEnabled, onToggleXhs,
+    showTimestampSetting, isTimestampForced, onToggleTimestamp,
+    onReadAloud, onVoiceToText, onDownloadVoice, autoTts, onToggleAutoTts
 }) => {
     const bgInputRef = useRef<HTMLInputElement>(null);
     const [visibilitySelection, setVisibilitySelection] = useState<Set<string>>(new Set());
@@ -129,26 +141,26 @@ const ChatModals: React.FC<ChatModalsProps> = ({
 
     return (
         <>
-            <Modal 
+            <Modal
                 isOpen={modalType === 'transfer'} title="Credits 转账" onClose={() => setModalType('none')}
                 footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onTransfer} className="flex-1 py-3 bg-orange-500 text-white rounded-2xl">确认</button></>}
             ><input type="number" value={transferAmt} onChange={e => setTransferAmt(e.target.value)} className="w-full bg-slate-100 rounded-2xl px-5 py-4 text-lg font-bold" autoFocus /></Modal>
 
             {/* New Category Modal */}
-            <Modal 
+            <Modal
                 isOpen={modalType === 'add-category'} title="新建表情分类" onClose={() => setModalType('none')}
                 footer={<button onClick={onAddCategory} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">创建</button>}
             >
-                <input 
-                    value={newCategoryName} 
-                    onChange={e => setNewCategoryName(e.target.value)} 
-                    placeholder="输入分类名称..." 
-                    className="w-full bg-slate-100 rounded-2xl px-5 py-4 text-base font-bold focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all text-slate-700" 
-                    autoFocus 
+                <input
+                    value={newCategoryName}
+                    onChange={e => setNewCategoryName(e.target.value)}
+                    placeholder="输入分类名称..."
+                    className="w-full bg-slate-100 rounded-2xl px-5 py-4 text-base font-bold focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all text-slate-700"
+                    autoFocus
                 />
             </Modal>
 
-            <Modal 
+            <Modal
                 isOpen={modalType === 'emoji-import'} title="表情注入" onClose={() => setModalType('none')}
                 footer={<button onClick={onImportEmoji} className="w-full py-4 bg-primary text-white font-bold rounded-2xl">添加至当前分类</button>}
             >
@@ -158,121 +170,150 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                 </div>
             </Modal>
 
-            <Modal 
+            <Modal
                 isOpen={modalType === 'chat-settings'} title="聊天设置" onClose={() => setModalType('none')}
                 footer={<button onClick={onSaveSettings} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">保存设置</button>}
             >
                 <div className="space-y-6">
-                     <div>
-                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">聊天背景</label>
-                         <div onClick={() => bgInputRef.current?.click()} className="h-24 bg-slate-100 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center cursor-pointer hover:border-primary/50 overflow-hidden relative">
-                             {activeCharacter.chatBackground ? <img src={activeCharacter.chatBackground} className="w-full h-full object-cover opacity-60" /> : <span className="text-xs text-slate-400">点击上传图片 (原画质)</span>}
-                             {activeCharacter.chatBackground && <span className="absolute z-10 text-xs bg-white/80 px-2 py-1 rounded">更换</span>}
-                         </div>
-                         <input type="file" ref={bgInputRef} className="hidden" accept="image/*" onChange={(e) => e.target.files?.[0] && onBgUpload(e.target.files[0])} />
-                         {activeCharacter.chatBackground && <button onClick={onRemoveBg} className="text-[10px] text-red-400 mt-1">移除背景</button>}
-                     </div>
-                     <div>
-                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">上下文条数 ({settingsContextLimit})</label>
-                         <input type="range" min="20" max="5000" step="10" value={settingsContextLimit} onChange={e => setSettingsContextLimit(parseInt(e.target.value))} className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-primary" />
-                         <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>5000 (超长记忆)</span></div>
-                     </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">聊天背景</label>
+                        <div onClick={() => bgInputRef.current?.click()} className="h-24 bg-slate-100 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center cursor-pointer hover:border-primary/50 overflow-hidden relative">
+                            {activeCharacter.chatBackground ? <img src={activeCharacter.chatBackground} className="w-full h-full object-cover opacity-60" /> : <span className="text-xs text-slate-400">点击上传图片 (原画质)</span>}
+                            {activeCharacter.chatBackground && <span className="absolute z-10 text-xs bg-white/80 px-2 py-1 rounded">更换</span>}
+                        </div>
+                        <input type="file" ref={bgInputRef} className="hidden" accept="image/*" onChange={(e) => e.target.files?.[0] && onBgUpload(e.target.files[0])} />
+                        {activeCharacter.chatBackground && <button onClick={onRemoveBg} className="text-[10px] text-red-400 mt-1">移除背景</button>}
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">上下文条数 ({settingsContextLimit})</label>
+                        <input type="range" min="20" max="5000" step="10" value={settingsContextLimit} onChange={e => setSettingsContextLimit(parseInt(e.target.value))} className="w-full h-2 bg-slate-200 rounded-full appearance-none accent-primary" />
+                        <div className="flex justify-between text-[10px] text-slate-400 mt-1"><span>20 (省流)</span><span>5000 (超长记忆)</span></div>
+                    </div>
 
-                     <div className="pt-2 border-t border-slate-100">
-                         <div className="flex justify-between items-center cursor-pointer" onClick={() => setSettingsHideSysLogs(!settingsHideSysLogs)}>
-                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">隐藏系统日志</label>
-                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${settingsHideSysLogs ? 'bg-primary' : 'bg-slate-200'}`}>
-                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${settingsHideSysLogs ? 'translate-x-4' : ''}`}></div>
-                             </div>
-                         </div>
-                         <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                             开启后，将不再显示 Date/App 产生的上下文提示文本（转账、戳一戳、图片发送提示除外）。
-                         </p>
-                     </div>
+                    <div className="pt-2 border-t border-slate-100">
+                        <div className="flex justify-between items-center cursor-pointer" onClick={() => setSettingsHideSysLogs(!settingsHideSysLogs)}>
+                            <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">隐藏系统日志</label>
+                            <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${settingsHideSysLogs ? 'bg-primary' : 'bg-slate-200'}`}>
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${settingsHideSysLogs ? 'translate-x-4' : ''}`}></div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                            开启后，将不再显示 Date/App 产生的上下文提示文本（转账、戳一戳、图片发送提示除外）。
+                        </p>
+                    </div>
 
-                     {/* Translation Settings */}
-                     <div className="pt-2 border-t border-slate-100">
-                         <div className="flex justify-between items-center cursor-pointer" onClick={onToggleTranslation}>
-                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">消息翻译</label>
-                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${translationEnabled ? 'bg-primary' : 'bg-slate-200'}`}>
-                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${translationEnabled ? 'translate-x-4' : ''}`}></div>
-                             </div>
-                         </div>
-                         <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
-                             开启后，AI 消息自动翻译为「选」的语言显示，点「译」切换到目标语言。
-                         </p>
-                         {translationEnabled && (
-                             <div className="mt-3 space-y-3">
-                                 {/* Source Language (选) */}
-                                 <div>
-                                     <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">选（气泡显示语言）</label>
-                                     <div className="flex flex-wrap gap-1.5">
-                                         {['中文', 'English', '日本語', '한국어', 'Français', 'Español'].map(lang => (
-                                             <button
-                                                 key={`src-${lang}`}
-                                                 onClick={() => onSetTranslateSourceLang?.(lang)}
-                                                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${translateSourceLang === lang ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500'}`}
-                                             >
-                                                 {lang}
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
-                                 {/* Target Language (译) */}
-                                 <div>
-                                     <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">译（翻译目标语言）</label>
-                                     <div className="flex flex-wrap gap-1.5">
-                                         {['中文', 'English', '日本語', '한국어', 'Français', 'Español'].map(lang => (
-                                             <button
-                                                 key={`tgt-${lang}`}
-                                                 onClick={() => onSetTranslateLang?.(lang)}
-                                                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${translateTargetLang === lang ? 'bg-primary text-white' : 'bg-slate-100 text-slate-500'}`}
-                                             >
-                                                 {lang}
-                                             </button>
-                                         ))}
-                                     </div>
-                                 </div>
-                                 {/* Preview */}
-                                 <div className="text-[11px] text-center text-slate-500 bg-slate-50 rounded-lg py-2">
-                                     选<span className="font-bold text-slate-700">{translateSourceLang || '?'}</span> 译<span className="font-bold text-primary">{translateTargetLang || '?'}</span>
-                                 </div>
-                             </div>
-                         )}
-                     </div>
+                    {/* Timestamp Toggle */}
+                    <div className="pt-2 border-t border-slate-100">
+                        <div className={`flex justify-between items-center ${isTimestampForced ? 'opacity-60' : 'cursor-pointer'}`} onClick={isTimestampForced ? undefined : onToggleTimestamp}>
+                            <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">消息时间戳</label>
+                            <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${showTimestampSetting ? 'bg-primary' : 'bg-slate-200'}`}>
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${showTimestampSetting ? 'translate-x-4' : ''}`}></div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                            {isTimestampForced
+                                ? '当前主题（微信）强制显示时间戳'
+                                : '开启后，消息间隔超过 3 分钟时显示时间戳分隔符'
+                            }
+                        </p>
+                    </div>
 
-                     {/* XHS Toggle */}
-                     <div className="pt-2 border-t border-slate-100">
-                         <div className="flex justify-between items-center cursor-pointer" onClick={onToggleXhs}>
-                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">小红书</label>
-                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${xhsEnabled ? 'bg-red-400' : 'bg-slate-200'}`}>
-                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${xhsEnabled ? 'translate-x-4' : ''}`}></div>
-                             </div>
-                         </div>
-                         <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                             开启后，角色在聊天中可以搜索、浏览、发帖、评论小红书。需要在全局设置中配置 MCP 或 Cookie。
-                         </p>
-                     </div>
+                    {/* Translation Settings */}
+                    <div className="pt-2 border-t border-slate-100">
+                        <div className="flex justify-between items-center cursor-pointer" onClick={onToggleTranslation}>
+                            <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">消息翻译</label>
+                            <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${translationEnabled ? 'bg-primary' : 'bg-slate-200'}`}>
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${translationEnabled ? 'translate-x-4' : ''}`}></div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                            开启后，AI 消息自动翻译为「选」的语言显示，点「译」切换到目标语言。
+                        </p>
+                        {translationEnabled && (
+                            <div className="mt-3 space-y-3">
+                                {/* Source Language (选) */}
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">选（气泡显示语言）</label>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {['中文', 'English', '日本語', '한국어', 'Français', 'Español'].map(lang => (
+                                            <button
+                                                key={`src-${lang}`}
+                                                onClick={() => onSetTranslateSourceLang?.(lang)}
+                                                className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${translateSourceLang === lang ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500'}`}
+                                            >
+                                                {lang}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {/* Target Language (译) */}
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-400 mb-1.5 block">译（翻译目标语言）</label>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {['中文', 'English', '日本語', '한국어', 'Français', 'Español'].map(lang => (
+                                            <button
+                                                key={`tgt-${lang}`}
+                                                onClick={() => onSetTranslateLang?.(lang)}
+                                                className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${translateTargetLang === lang ? 'bg-primary text-white' : 'bg-slate-100 text-slate-500'}`}
+                                            >
+                                                {lang}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {/* Preview */}
+                                <div className="text-[11px] text-center text-slate-500 bg-slate-50 rounded-lg py-2">
+                                    选<span className="font-bold text-slate-700">{translateSourceLang || '?'}</span> 译<span className="font-bold text-primary">{translateTargetLang || '?'}</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
 
-                     <div className="pt-2 border-t border-slate-100">
-                         <button onClick={() => setModalType('history-manager')} className="w-full py-3 bg-slate-50 text-slate-600 font-bold rounded-2xl border border-slate-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                             管理上下文 / 隐藏历史
-                         </button>
-                         <p className="text-[10px] text-slate-400 mt-2 text-center">可选择从某条消息开始显示，隐藏之前的记录（不被 AI 读取）。</p>
-                     </div>
-                     
-                     <div className="pt-2 border-t border-slate-100">
-                         <label className="text-xs font-bold text-red-400 uppercase mb-3 block">危险区域 (Danger Zone)</label>
-                         <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setPreserveContext(!preserveContext)}>
-                             <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${preserveContext ? 'bg-primary border-primary' : 'bg-slate-100 border-slate-300'}`}>
-                                 {preserveContext && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
-                             </div>
-                             <span className="text-sm text-slate-600">清空时保留最后10条记录 (维持语境)</span>
-                         </div>
-                         <button onClick={onClearHistory} className="w-full py-3 bg-red-50 text-red-500 font-bold rounded-2xl border border-red-100 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                             执行清空
-                         </button>
-                     </div>
+                    {/* XHS Toggle */}
+                    <div className="pt-2 border-t border-slate-100">
+                        <div className="flex justify-between items-center cursor-pointer" onClick={onToggleXhs}>
+                            <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">小红书</label>
+                            <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${xhsEnabled ? 'bg-red-400' : 'bg-slate-200'}`}>
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${xhsEnabled ? 'translate-x-4' : ''}`}></div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                            开启后，角色在聊天中可以搜索、浏览、发帖、评论小红书。需要在全局设置中配置 MCP 或 Cookie。
+                        </p>
+                    </div>
+
+                    {/* Auto TTS Toggle */}
+                    <div className="pt-2 border-t border-slate-100">
+                        <div className="flex justify-between items-center cursor-pointer" onClick={onToggleAutoTts}>
+                            <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">AI 自动语音回复</label>
+                            <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${autoTts ? 'bg-primary' : 'bg-slate-200'}`}>
+                                <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${autoTts ? 'translate-x-4' : ''}`}></div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                            开启后，AI 每次回复时会自动生成语音消息。需要先在全局设置中配置 TTS。
+                        </p>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100">
+                        <button onClick={() => setModalType('history-manager')} className="w-full py-3 bg-slate-50 text-slate-600 font-bold rounded-2xl border border-slate-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
+                            管理上下文 / 隐藏历史
+                        </button>
+                        <p className="text-[10px] text-slate-400 mt-2 text-center">可选择从某条消息开始显示，隐藏之前的记录（不被 AI 读取）。</p>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100">
+                        <label className="text-xs font-bold text-red-400 uppercase mb-3 block">危险区域 (Danger Zone)</label>
+                        <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setPreserveContext(!preserveContext)}>
+                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${preserveContext ? 'bg-primary border-primary' : 'bg-slate-100 border-slate-300'}`}>
+                                {preserveContext && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                            <span className="text-sm text-slate-600">清空时保留最后10条记录 (维持语境)</span>
+                        </div>
+                        <button onClick={onClearHistory} className="w-full py-3 bg-red-50 text-red-500 font-bold rounded-2xl border border-red-100 active:scale-95 transition-transform flex items-center justify-center gap-2">
+                            执行清空
+                        </button>
+                    </div>
                 </div>
             </Modal>
 
@@ -297,8 +338,8 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                         <button onClick={onCreatePrompt} className="mt-3 w-full py-2 text-xs font-bold text-indigo-500 border border-dashed border-indigo-300 rounded-lg hover:bg-indigo-100">+ 新建自定义提示词</button>
                     </div>
                     <div className="text-[10px] text-slate-400 bg-slate-50 p-3 rounded-xl leading-relaxed">
-                        • <b>理性精炼</b>: 适合生成条理清晰的事件日志，便于 AI 长期记忆检索。<br/>
-                        • <b>日记风格</b>: 适合生成第一人称的角色日记，更有代入感和情感色彩。<br/>
+                        • <b>理性精炼</b>: 适合生成条理清晰的事件日志，便于 AI 长期记忆检索。<br />
+                        • <b>日记风格</b>: 适合生成第一人称的角色日记，更有代入感和情感色彩。<br />
                         • 支持变量: <code>{'${dateStr}'}</code>, <code>{'${char.name}'}</code>, <code>{'${userProfile.name}'}</code>, <code>{'${rawLog}'}</code>
                     </div>
                 </div>
@@ -307,15 +348,15 @@ const ChatModals: React.FC<ChatModalsProps> = ({
             {/* Prompt Editor Modal */}
             <Modal isOpen={modalType === 'prompt-editor'} title="编辑提示词" onClose={() => setModalType('archive-settings')} footer={<button onClick={onSavePrompt} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">保存预设</button>}>
                 <div className="space-y-3">
-                    <input 
-                        value={editingPrompt?.name || ''} 
-                        onChange={e => setEditingPrompt((prev: any) => prev ? {...prev, name: e.target.value} : null)}
+                    <input
+                        value={editingPrompt?.name || ''}
+                        onChange={e => setEditingPrompt((prev: any) => prev ? { ...prev, name: e.target.value } : null)}
                         placeholder="预设名称"
                         className="w-full px-4 py-2 bg-slate-100 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-primary/20"
                     />
-                    <textarea 
-                        value={editingPrompt?.content || ''} 
-                        onChange={e => setEditingPrompt((prev: any) => prev ? {...prev, content: e.target.value} : null)}
+                    <textarea
+                        value={editingPrompt?.content || ''}
+                        onChange={e => setEditingPrompt((prev: any) => prev ? { ...prev, content: e.target.value } : null)}
                         className="w-full h-64 bg-slate-100 rounded-xl p-3 text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-primary/20 leading-relaxed"
                         placeholder="输入提示词内容..."
                     />
@@ -343,7 +384,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                             )}
                             {pageMessages.map(m => (
                                 <div key={m.id} onClick={() => onSetHistoryStart(m.id)} className={`p-3 rounded-xl border cursor-pointer text-xs flex gap-2 items-start ${activeCharacter.hideBeforeMessageId === m.id ? 'bg-primary/10 border-primary ring-1 ring-primary' : 'bg-white border-slate-100 hover:bg-slate-50'}`}>
-                                    <span className="text-slate-400 font-mono whitespace-nowrap pt-0.5">[{new Date(m.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}]</span>
+                                    <span className="text-slate-400 font-mono whitespace-nowrap pt-0.5">[{new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}]</span>
                                     <div className="flex-1 min-w-0">
                                         <div className="font-bold text-slate-600 mb-0.5">{m.role === 'user' ? '我' : activeCharacter.name}</div>
                                         <div className="text-slate-500 truncate">{m.content}</div>
@@ -360,7 +401,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                     })()}
                 </div>
             </Modal>
-            
+
             <Modal isOpen={modalType === 'message-options'} title="消息操作" onClose={() => setModalType('none')}>
                 <div className="space-y-3">
                     <button onClick={onEnterSelectionMode} className="w-full py-3 bg-slate-50 text-slate-700 font-medium rounded-2xl active:bg-slate-100 transition-colors flex items-center justify-center gap-2">
@@ -379,13 +420,31 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                             复制文字
                         </button>
                     )}
+                    {/* Voice: Read Aloud for text messages */}
+                    {selectedMessage?.type === 'text' && onReadAloud && (
+                        <button onClick={onReadAloud} className="w-full py-3 bg-slate-50 text-slate-700 font-medium rounded-2xl active:bg-slate-100 transition-colors flex items-center justify-center gap-2">
+                            🔊 朗读
+                        </button>
+                    )}
+                    {/* Voice: Convert to text for voice messages */}
+                    {selectedMessage?.type === 'voice' && onVoiceToText && (
+                        <button onClick={onVoiceToText} className="w-full py-3 bg-slate-50 text-slate-700 font-medium rounded-2xl active:bg-slate-100 transition-colors flex items-center justify-center gap-2">
+                            📝 转文字
+                        </button>
+                    )}
+                    {/* Voice: Download audio for voice messages */}
+                    {selectedMessage?.type === 'voice' && selectedMessage?.metadata?.hasAudio && onDownloadVoice && (
+                        <button onClick={onDownloadVoice} className="w-full py-3 bg-slate-50 text-slate-700 font-medium rounded-2xl active:bg-slate-100 transition-colors flex items-center justify-center gap-2">
+                            ⬇️ 下载语音
+                        </button>
+                    )}
                     <button onClick={onDeleteMessage} className="w-full py-3 bg-red-50 text-red-500 font-medium rounded-2xl active:bg-red-100 transition-colors flex items-center justify-center gap-2">
                         删除消息
                     </button>
                 </div>
             </Modal>
-            
-             <Modal
+
+            <Modal
                 isOpen={modalType === 'delete-emoji'} title="删除表情包" onClose={() => setModalType('none')}
                 footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onDeleteEmoji} className="flex-1 py-3 bg-red-500 text-white font-bold rounded-2xl">删除</button></>}
             >
@@ -401,7 +460,7 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                 footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onDeleteCategory} className="flex-1 py-3 bg-red-500 text-white font-bold rounded-2xl">删除</button></>}
             >
                 <div className="py-4 text-center">
-                    <p className="text-sm text-slate-600">确定要删除分类 <br/><span className="font-bold">"{selectedCategory?.name}"</span> 吗？</p>
+                    <p className="text-sm text-slate-600">确定要删除分类 <br /><span className="font-bold">"{selectedCategory?.name}"</span> 吗？</p>
                     <p className="text-[10px] text-red-400 mt-2">注意：分类下的所有表情也将被删除！</p>
                 </div>
             </Modal>
@@ -434,9 +493,27 @@ const ChatModals: React.FC<ChatModalsProps> = ({
             >
                 <div className="space-y-3">
                     <p className="text-xs text-slate-400 leading-relaxed">
-                        选择哪些角色可以使用此表情分组。不勾选任何角色表示所有角色均可使用。
+                        选择谁可以使用此表情分组。不勾选任何选项表示所有人均可使用。
                     </p>
                     <div className="space-y-2 max-h-[40vh] overflow-y-auto no-scrollbar">
+                        {/* User (self) option */}
+                        <div
+                            onClick={() => toggleVisibilityChar('__user__')}
+                            className={`flex items-center gap-3 p-3 rounded-2xl border cursor-pointer transition-all ${visibilitySelection.has('__user__') ? 'bg-blue-50 border-blue-300' : 'bg-white border-slate-100 hover:bg-slate-50'}`}
+                        >
+                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 ${visibilitySelection.has('__user__') ? 'bg-blue-500 border-blue-500' : 'bg-slate-100 border-slate-300'}`}>
+                                {visibilitySelection.has('__user__') && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                            <div className="w-9 h-9 rounded-xl bg-blue-100 flex items-center justify-center text-lg">👤</div>
+                            <div className="flex-1 min-w-0">
+                                <div className="font-bold text-sm text-slate-700">用户（我）</div>
+                                <div className="text-[10px] text-slate-400">勾选后可在所有聊天中使用此分组</div>
+                            </div>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="flex items-center gap-2 px-1"><div className="flex-1 h-px bg-slate-100" /><span className="text-[10px] text-slate-300">角色</span><div className="flex-1 h-px bg-slate-100" /></div>
+
                         {allCharacters.map(c => (
                             <div
                                 key={c.id}
@@ -456,7 +533,10 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                     </div>
                     {visibilitySelection.size > 0 && (
                         <div className="text-[11px] text-center text-slate-500 bg-slate-50 rounded-lg py-2">
-                            已选 <span className="font-bold text-primary">{visibilitySelection.size}</span> 个角色可使用此分组
+                            {visibilitySelection.size === 1 && visibilitySelection.has('__user__')
+                                ? <>仅 <span className="font-bold text-blue-500">用户</span> 可发送此分组表情，AI 无法使用</>
+                                : <>已选 <span className="font-bold text-primary">{visibilitySelection.size}</span> 个可使用此分组</>
+                            }
                         </div>
                     )}
                 </div>
@@ -466,10 +546,10 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                 isOpen={modalType === 'edit-message'} title="编辑内容" onClose={() => setModalType('none')}
                 footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onConfirmEditMessage} className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl">保存</button></>}
             >
-                <textarea 
-                    value={editContent} 
-                    onChange={e => setEditContent(e.target.value)} 
-                    className="w-full h-32 bg-slate-100 rounded-2xl p-4 resize-none focus:ring-1 focus:ring-primary/20 transition-all text-sm leading-relaxed" 
+                <textarea
+                    value={editContent}
+                    onChange={e => setEditContent(e.target.value)}
+                    className="w-full h-32 bg-slate-100 rounded-2xl p-4 resize-none focus:ring-1 focus:ring-primary/20 transition-all text-sm leading-relaxed"
                 />
             </Modal>
         </>

@@ -1,0 +1,35 @@
+// vite.config.ts
+import { defineConfig } from "file:///C:/Users/ASUS/Desktop/%E7%B3%AF%E7%B1%B3%E6%9C%BA%E4%BA%8C%E6%94%B9/SULLYTEST2/node_modules/vitest/dist/config.js";
+import react from "file:///C:/Users/ASUS/Desktop/%E7%B3%AF%E7%B1%B3%E6%9C%BA%E4%BA%8C%E6%94%B9/SULLYTEST2/node_modules/@vitejs/plugin-react/dist/index.js";
+var vite_config_default = defineConfig({
+  plugins: [react()],
+  server: {
+    https: true,
+    proxy: {
+      "/minimax-api": {
+        target: "https://api.minimaxi.com",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/minimax-api/, "")
+      }
+    }
+  },
+  base: "./",
+  // 关键配置：使用相对路径，确保在 GitHub Pages 子目录下能找到资源
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: "./test/setup.ts"
+  },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    rollupOptions: {
+      // 关键修复：将这些包排除在打包之外，让浏览器通过 index.html 的 importmap 加载
+      external: ["pdfjs-dist", "katex", "jszip"]
+    }
+  }
+});
+export {
+  vite_config_default as default
+};
+//# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsidml0ZS5jb25maWcudHMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbImNvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9kaXJuYW1lID0gXCJDOlxcXFxVc2Vyc1xcXFxBU1VTXFxcXERlc2t0b3BcXFxcXHU3Q0VGXHU3QzczXHU2NzNBXHU0RThDXHU2NTM5XFxcXFNVTExZVEVTVDJcIjtjb25zdCBfX3ZpdGVfaW5qZWN0ZWRfb3JpZ2luYWxfZmlsZW5hbWUgPSBcIkM6XFxcXFVzZXJzXFxcXEFTVVNcXFxcRGVza3RvcFxcXFxcdTdDRUZcdTdDNzNcdTY3M0FcdTRFOENcdTY1MzlcXFxcU1VMTFlURVNUMlxcXFx2aXRlLmNvbmZpZy50c1wiO2NvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9pbXBvcnRfbWV0YV91cmwgPSBcImZpbGU6Ly8vQzovVXNlcnMvQVNVUy9EZXNrdG9wLyVFNyVCMyVBRiVFNyVCMSVCMyVFNiU5QyVCQSVFNCVCQSU4QyVFNiU5NCVCOS9TVUxMWVRFU1QyL3ZpdGUuY29uZmlnLnRzXCI7aW1wb3J0IHsgZGVmaW5lQ29uZmlnIH0gZnJvbSAndml0ZXN0L2NvbmZpZyc7XHJcbmltcG9ydCByZWFjdCBmcm9tICdAdml0ZWpzL3BsdWdpbi1yZWFjdCc7XHJcblxyXG5leHBvcnQgZGVmYXVsdCBkZWZpbmVDb25maWcoe1xyXG4gIHBsdWdpbnM6IFtyZWFjdCgpIGFzIGFueV0sXHJcbiAgc2VydmVyOiB7XHJcbiAgICBodHRwczogdHJ1ZSxcclxuICAgIHByb3h5OiB7XHJcbiAgICAgICcvbWluaW1heC1hcGknOiB7XHJcbiAgICAgICAgdGFyZ2V0OiAnaHR0cHM6Ly9hcGkubWluaW1heGkuY29tJyxcclxuICAgICAgICBjaGFuZ2VPcmlnaW46IHRydWUsXHJcbiAgICAgICAgcmV3cml0ZTogKHBhdGgpID0+IHBhdGgucmVwbGFjZSgvXlxcL21pbmltYXgtYXBpLywgJycpXHJcbiAgICAgIH1cclxuICAgIH1cclxuICB9LFxyXG4gIGJhc2U6ICcuLycsIC8vIFx1NTE3M1x1OTUyRVx1OTE0RFx1N0Y2RVx1RkYxQVx1NEY3Rlx1NzUyOFx1NzZGOFx1NUJGOVx1OERFRlx1NUY4NFx1RkYwQ1x1Nzg2RVx1NEZERFx1NTcyOCBHaXRIdWIgUGFnZXMgXHU1QjUwXHU3NkVFXHU1RjU1XHU0RTBCXHU4MEZEXHU2MjdFXHU1MjMwXHU4RDQ0XHU2RTkwXHJcbiAgdGVzdDoge1xyXG4gICAgZ2xvYmFsczogdHJ1ZSxcclxuICAgIGVudmlyb25tZW50OiAnanNkb20nLFxyXG4gICAgc2V0dXBGaWxlczogJy4vdGVzdC9zZXR1cC50cycsXHJcbiAgfSxcclxuICBidWlsZDoge1xyXG4gICAgb3V0RGlyOiAnZGlzdCcsXHJcbiAgICBhc3NldHNEaXI6ICdhc3NldHMnLFxyXG4gICAgcm9sbHVwT3B0aW9uczoge1xyXG4gICAgICAvLyBcdTUxNzNcdTk1MkVcdTRGRUVcdTU5MERcdUZGMUFcdTVDMDZcdThGRDlcdTRFOUJcdTUzMDVcdTYzOTJcdTk2NjRcdTU3MjhcdTYyNTNcdTUzMDVcdTRFNEJcdTU5MTZcdUZGMENcdThCQTlcdTZENEZcdTg5QzhcdTU2NjhcdTkwMUFcdThGQzcgaW5kZXguaHRtbCBcdTc2ODQgaW1wb3J0bWFwIFx1NTJBMFx1OEY3RFxyXG4gICAgICBleHRlcm5hbDogWydwZGZqcy1kaXN0JywgJ2thdGV4JywgJ2pzemlwJ11cclxuICAgIH1cclxuICB9XHJcbn0pO1xyXG4iXSwKICAibWFwcGluZ3MiOiAiO0FBQXdWLFNBQVMsb0JBQW9CO0FBQ3JYLE9BQU8sV0FBVztBQUVsQixJQUFPLHNCQUFRLGFBQWE7QUFBQSxFQUMxQixTQUFTLENBQUMsTUFBTSxDQUFRO0FBQUEsRUFDeEIsUUFBUTtBQUFBLElBQ04sT0FBTztBQUFBLElBQ1AsT0FBTztBQUFBLE1BQ0wsZ0JBQWdCO0FBQUEsUUFDZCxRQUFRO0FBQUEsUUFDUixjQUFjO0FBQUEsUUFDZCxTQUFTLENBQUMsU0FBUyxLQUFLLFFBQVEsa0JBQWtCLEVBQUU7QUFBQSxNQUN0RDtBQUFBLElBQ0Y7QUFBQSxFQUNGO0FBQUEsRUFDQSxNQUFNO0FBQUE7QUFBQSxFQUNOLE1BQU07QUFBQSxJQUNKLFNBQVM7QUFBQSxJQUNULGFBQWE7QUFBQSxJQUNiLFlBQVk7QUFBQSxFQUNkO0FBQUEsRUFDQSxPQUFPO0FBQUEsSUFDTCxRQUFRO0FBQUEsSUFDUixXQUFXO0FBQUEsSUFDWCxlQUFlO0FBQUE7QUFBQSxNQUViLFVBQVUsQ0FBQyxjQUFjLFNBQVMsT0FBTztBQUFBLElBQzNDO0FBQUEsRUFDRjtBQUNGLENBQUM7IiwKICAibmFtZXMiOiBbXQp9Cg==

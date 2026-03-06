@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
+import { useVirtualTime } from '../context/VirtualTimeContext';
 import { DB } from '../utils/db';
 import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, MemoryFragment, EmojiCategory } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
 import Modal from '../components/os/Modal';
 import { ContextBuilder } from '../utils/context';
 import { processImage } from '../utils/file';
-import { DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
+import { DEFAULT_ARCHIVE_PROMPTS } from '../constants/archivePrompts';
 
 // 复用 Chat.tsx 的高颜值样式逻辑，但针对群聊微调
 const PRESET_THEME_GROUP: ChatTheme = {
@@ -17,21 +18,21 @@ const PRESET_THEME_GROUP: ChatTheme = {
 };
 
 // --- Sub-Component: Group Message Bubble ---
-const GroupMessageItem = React.memo(({ 
-    msg, 
-    isUser, 
-    char, 
-    userAvatar, 
-    onImageClick, 
-    selectionMode, 
-    isSelected, 
+const GroupMessageItem = React.memo(({
+    msg,
+    isUser,
+    char,
+    userAvatar,
+    onImageClick,
+    selectionMode,
+    isSelected,
     onToggleSelect,
-    onLongPress 
-}: { 
-    msg: Message, 
-    isUser: boolean, 
-    char?: CharacterProfile, 
-    userAvatar: string, 
+    onLongPress
+}: {
+    msg: Message,
+    isUser: boolean,
+    char?: CharacterProfile,
+    userAvatar: string,
     onImageClick: (url: string) => void,
     selectionMode: boolean,
     isSelected: boolean,
@@ -42,7 +43,7 @@ const GroupMessageItem = React.memo(({
     const name = isUser ? '我' : char?.name || '未知成员';
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const startPos = useRef({ x: 0, y: 0 });
-    
+
     // Time formatting
     const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -128,7 +129,7 @@ const GroupMessageItem = React.memo(({
     };
 
     return (
-        <div 
+        <div
             className={`flex gap-3 mb-4 w-full animate-fade-in relative ${isUser ? 'justify-end' : 'justify-start'} ${selectionMode ? 'pl-8' : ''}`}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
@@ -151,7 +152,7 @@ const GroupMessageItem = React.memo(({
                     <img src={avatar} className="w-9 h-9 rounded-full object-cover shadow-sm border border-white" loading="lazy" />
                 </div>
             )}
-            
+
             <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} max-w-[80%] ${selectionMode ? 'pointer-events-none' : ''}`}>
                 {!isUser && <span className="text-[10px] text-slate-400 ml-1 mb-1">{name}</span>}
                 {renderContent()}
@@ -170,7 +171,8 @@ const GroupMessageItem = React.memo(({
 // --- Main Component ---
 
 const GroupChat: React.FC = () => {
-    const { closeApp, groups, createGroup, deleteGroup, characters, updateCharacter, apiConfig, addToast, userProfile, virtualTime } = useOS();
+    const { closeApp, groups, createGroup, deleteGroup, characters, updateCharacter, apiConfig, addToast, userProfile } = useOS();
+    const virtualTime = useVirtualTime();
     const [view, setView] = useState<'list' | 'chat'>('list');
     const [activeGroup, setActiveGroup] = useState<GroupProfile | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
@@ -178,7 +180,7 @@ const GroupChat: React.FC = () => {
     const [visibleCount, setVisibleCount] = useState(30);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
-    
+
     // UI State
     const [showActions, setShowActions] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -189,27 +191,27 @@ const GroupChat: React.FC = () => {
     const [summaryProgress, setSummaryProgress] = useState('');
 
     // Archive prompt selection (shared with Chat app)
-    const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
+    const [archivePrompts, setArchivePrompts] = useState<{ id: string, name: string, content: string }[]>(DEFAULT_ARCHIVE_PROMPTS);
     const [selectedPromptId, setSelectedPromptId] = useState<string>('preset_rational');
 
     // Context limit (like Chat app's settingsContextLimit)
     const [contextLimit, setContextLimit] = useState<number>(() => {
         try { return parseInt(localStorage.getItem('groupchat_context_limit') || '30'); } catch { return 30; }
     });
-    
+
     // Selection Mode
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
     // Data State
-    const [emojis, setEmojis] = useState<{name: string, url: string, categoryId?: string}[]>([]);
+    const [emojis, setEmojis] = useState<{ name: string, url: string, categoryId?: string }[]>([]);
     const [categories, setCategories] = useState<EmojiCategory[]>([]); // New
-    
+
     // Create/Edit Group State
     const [tempGroupName, setTempGroupName] = useState('');
     const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set());
     const [transferAmount, setTransferAmount] = useState('');
-    
+
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -223,7 +225,7 @@ const GroupChat: React.FC = () => {
                 const parsed = JSON.parse(savedPrompts);
                 const merged = [...DEFAULT_ARCHIVE_PROMPTS, ...parsed.filter((p: any) => !p.id.startsWith('preset_'))];
                 setArchivePrompts(merged);
-            } catch(e) {}
+            } catch (e) { }
         }
     }, []);
 
@@ -264,7 +266,7 @@ const GroupChat: React.FC = () => {
         const now = Date.now();
         const diffHours = Math.floor((now - lastMsgTimestamp) / (1000 * 60 * 60));
         const diffMins = Math.floor((now - lastMsgTimestamp) / (1000 * 60));
-        
+
         const currentHour = new Date().getHours();
         const isNight = currentHour >= 23 || currentHour <= 6;
 
@@ -281,7 +283,7 @@ const GroupChat: React.FC = () => {
         // Let's ensure we look at messages WITHOUT groupId
         const privateMsgs = msgs.filter(m => !m.groupId);
         if (privateMsgs.length === 0) return '从未私聊过';
-        
+
         const lastMsg = privateMsgs[privateMsgs.length - 1];
         const now = Date.now();
         const diffMins = Math.floor((now - lastMsg.timestamp) / (1000 * 60));
@@ -349,7 +351,7 @@ const GroupChat: React.FC = () => {
 
     const handleReroll = async () => {
         if (!canReroll) return;
-        
+
         const lastMsg = messages[messages.length - 1];
         if (lastMsg.role !== 'assistant') return;
 
@@ -471,17 +473,17 @@ const GroupChat: React.FC = () => {
             // Group messages by Date (YYYY-MM-DD)
             const msgsByDate: Record<string, Message[]> = {};
             messages.forEach(m => {
-                const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', {year:'numeric', month:'2-digit', day:'2-digit'}).replace(/\//g, '-');
+                const dateStr = new Date(m.timestamp).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
                 if (!msgsByDate[dateStr]) msgsByDate[dateStr] = [];
                 msgsByDate[dateStr].push(m);
             });
 
             const dates = Object.keys(msgsByDate).sort();
-            
+
             for (let i = 0; i < dates.length; i++) {
                 const date = dates[i];
-                setSummaryProgress(`正在归档 ${date} (${i+1}/${dates.length})`);
-                
+                setSummaryProgress(`正在归档 ${date} (${i + 1}/${dates.length})`);
+
                 const dayMsgs = msgsByDate[date];
                 const logText = dayMsgs.map(m => {
                     const sender = m.role === 'user'
@@ -539,7 +541,7 @@ ${logText.substring(0, 10000)}
                     // Basic YAML extraction
                     const yamlMatch = content.match(/summary:\s*["']?([\s\S]*?)["']?$/);
                     let summaryText = yamlMatch ? yamlMatch[1] : content.replace(/^summary:\s*/i, '');
-                    
+
                     // Cleanup quotes if matched broadly
                     summaryText = summaryText.replace(/^["']|["']$/g, '').trim();
 
@@ -561,7 +563,7 @@ ${logText.substring(0, 10000)}
                         }
                     }
                 }
-                
+
                 await new Promise(r => setTimeout(r, 500)); // Rate limit buffer
             }
 
@@ -581,7 +583,7 @@ ${logText.substring(0, 10000)}
 
     const handleSendMessage = async (content: string, type: MessageType = 'text', metadata?: any) => {
         if (!activeGroup) return;
-        
+
         const newMessage = {
             charId: 'user',
             groupId: activeGroup.id,
@@ -592,11 +594,11 @@ ${logText.substring(0, 10000)}
         };
 
         await DB.saveMessage(newMessage);
-        
+
         // Optimistic update
         const updatedMsgs = await DB.getGroupMessages(activeGroup.id);
         setMessages(updatedMsgs);
-        
+
         // Close panels
         if (type !== 'text') {
             setShowActions(false);
@@ -627,7 +629,7 @@ ${logText.substring(0, 10000)}
         try {
             // 1. Prepare Group Context
             const groupMembers = characters.filter(c => activeGroup.members.includes(c.id));
-            
+
             // Calculate Time Context
             const lastMsg = currentMsgs[currentMsgs.length - 1];
             const timeGapInfo = lastMsg ? getTimeGapHint(lastMsg.timestamp) : "这是群聊的第一条消息。";
@@ -649,9 +651,9 @@ ${logText.substring(0, 10000)}
                 const privateMsgs = await DB.getMessagesByCharId(member.id);
                 // Get private gap string
                 const privateGapInfo = await getPrivateTimeGap(member.id);
-                
+
                 const recentPrivate = privateMsgs.slice(-10).map(m => `[${m.role === 'user' ? '用户' : '我'}]: ${m.content.substring(0, 50)}`).join('\n');
-                
+
                 // Construct Detailed Profile Wrapper
                 // CRITICAL FIX: Emphasize Private Context logic
                 context += `
@@ -760,7 +762,7 @@ ${recentGroupMsgs}
 
             const data = await safeResponseJson(response);
             let jsonStr = data.choices[0].message.content;
-            
+
             jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
             const firstBracket = jsonStr.indexOf('[');
             const lastBracket = jsonStr.lastIndexOf(']');
@@ -808,7 +810,7 @@ ${recentGroupMsgs}
                         action.content = action.content.replace(m[0], '');
                     }
                     action.content = action.content.trim();
-                    
+
                     // If content is empty after stripping (pure private message), skip public rendering
                     if (!action.content) continue;
                 }
@@ -835,18 +837,18 @@ ${recentGroupMsgs}
                 // 2. Text Splitting (Standard Chat Logic)
                 // Remove the emoji tag if it was processed, or just clean up
                 let textContent = action.content.replace(/\[\[SEND_EMOJI:.*?\]\]/g, '').trim();
-                
+
                 if (textContent) {
                     // Primary: split on line breaks
                     let chunks = textContent.split(/(?:\r\n|\r|\n|\u2028|\u2029)+/)
-                        .map(c => c.trim())
-                        .filter(c => c.length > 0);
+                        .map((c: string) => c.trim())
+                        .filter((c: string) => c.length > 0);
 
                     // Fallback: split on spaces between CJK characters (中文里空格=AI想换行)
                     if (chunks.length <= 1 && textContent.trim().length > 50) {
                         chunks = textContent.split(/(?<=[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u2000-\u206f\u2e80-\u2eff\u3001-\u3003\u2018-\u201f\u300a-\u300f\uff01-\uff0f\uff1a-\uff20])\s+(?=[\u4e00-\u9fff\u3400-\u4dbf])/)
-                            .map(c => c.trim())
-                            .filter(c => c.length > 0);
+                            .map((c: string) => c.trim())
+                            .filter((c: string) => c.length > 0);
                     }
 
                     if (chunks.length === 0) chunks.push(textContent); // Fallback
@@ -890,7 +892,7 @@ ${recentGroupMsgs}
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                     </button>
                 </div>
-                
+
                 <div className="p-4 space-y-3 overflow-y-auto">
                     {groups.map(g => (
                         <div key={g.id} onClick={() => { setActiveGroup(g); setView('chat'); }} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4 active:scale-[0.98] transition-all cursor-pointer group hover:bg-violet-50/30">
@@ -968,11 +970,11 @@ ${recentGroupMsgs}
                             </h1>
                             <p className="text-[10px] text-slate-500 font-medium">{activeGroup?.members.length} 成员</p>
                         </div>
-                        
+
                         {/* Reroll Button (Context Aware) */}
                         {canReroll && !isTyping && (
-                            <button 
-                                onClick={handleReroll} 
+                            <button
+                                onClick={handleReroll}
                                 className="p-2 rounded-full bg-slate-100 text-slate-500 hover:text-violet-600 transition-colors"
                                 title="重新生成回复"
                             >
@@ -981,9 +983,9 @@ ${recentGroupMsgs}
                         )}
 
                         {/* Manual Trigger Button (Only trigger, not send) */}
-                        <button 
-                            onClick={() => triggerDirector(messages)} 
-                            disabled={isTyping} 
+                        <button
+                            onClick={() => triggerDirector(messages)}
+                            disabled={isTyping}
                             className={`p-2 rounded-full transition-all active:scale-90 ${isTyping ? 'bg-slate-100 text-slate-300' : 'bg-violet-100 text-violet-600 shadow-sm'}`}
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M14.615 1.595a.75.75 0 0 1 .359.852L12.982 9.75h7.268a.75.75 0 0 1 .548 1.262l-10.5 11.25a.75.75 0 0 1-1.272-.71l1.992-7.302H3.75a.75.75 0 0 1-.548-1.262l10.5-11.25a.75.75 0 0 1 .914-.143Z" clipRule="evenodd" /></svg>
@@ -1040,8 +1042,8 @@ ${recentGroupMsgs}
             <div className="bg-[#f0f2f5] border-t border-slate-200 pb-safe shrink-0 z-40 relative">
                 {selectionMode ? (
                     <div className="p-3 flex justify-center bg-white">
-                        <button 
-                            onClick={deleteSelectedMessages} 
+                        <button
+                            onClick={deleteSelectedMessages}
                             className="w-full py-3 bg-red-500 text-white font-bold rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>
@@ -1051,7 +1053,7 @@ ${recentGroupMsgs}
                 ) : (
                     <div className="p-2 flex items-end gap-2">
                         {/* Plus / Actions Button */}
-                        <button 
+                        <button
                             onClick={() => { setShowActions(!showActions); setShowEmojiPicker(false); }}
                             className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-transform ${showActions ? 'bg-slate-300 rotate-45' : 'bg-transparent hover:bg-slate-200'}`}
                         >
@@ -1060,17 +1062,17 @@ ${recentGroupMsgs}
 
                         {/* Input Field Container */}
                         <div className="flex-1 bg-white rounded-xl flex items-end px-3 py-2 border border-slate-200 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100 transition-all">
-                            <textarea 
-                                rows={1} 
-                                value={input} 
-                                onChange={e => setInput(e.target.value)} 
-                                onKeyDown={e => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(input); }}} 
-                                className="flex-1 bg-transparent text-[16px] outline-none resize-none max-h-28 text-slate-800 placeholder:text-slate-400 py-1" 
-                                placeholder="Message..." 
-                                style={{ height: 'auto', minHeight: '24px' }} 
+                            <textarea
+                                rows={1}
+                                value={input}
+                                onChange={e => setInput(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(input); } }}
+                                className="flex-1 bg-transparent text-[16px] outline-none resize-none max-h-28 text-slate-800 placeholder:text-slate-400 py-1"
+                                placeholder="Message..."
+                                style={{ height: 'auto', minHeight: '24px' }}
                             />
                             {/* Emoji Toggle inside input */}
-                            <button 
+                            <button
                                 onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowActions(false); }}
                                 className="p-1 -mr-1 ml-1 text-slate-400 hover:text-yellow-500 transition-colors shrink-0"
                             >
@@ -1080,8 +1082,8 @@ ${recentGroupMsgs}
 
                         {/* Send Button */}
                         {input.trim() ? (
-                            <button 
-                                onClick={() => handleSendMessage(input)} 
+                            <button
+                                onClick={() => handleSendMessage(input)}
                                 className="h-9 px-4 bg-violet-500 text-white rounded-xl font-bold text-sm shadow-md active:scale-95 transition-all"
                             >
                                 发送
@@ -1184,12 +1186,12 @@ ${recentGroupMsgs}
                     {/* Danger Zone */}
                     <div className="pt-2 border-t border-slate-100">
                         <label className="text-[10px] font-bold text-red-400 uppercase tracking-widest mb-3 block">危险区域</label>
-                        
+
                         <div className="flex items-center gap-2 mb-3 cursor-pointer" onClick={() => setPreserveContext(!preserveContext)}>
-                             <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${preserveContext ? 'bg-violet-500 border-violet-500' : 'bg-slate-100 border-slate-300'}`}>
-                                 {preserveContext && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
-                             </div>
-                             <span className="text-xs text-slate-600">清空时保留最后10条记录 (维持语境)</span>
+                            <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${preserveContext ? 'bg-violet-500 border-violet-500' : 'bg-slate-100 border-slate-300'}`}>
+                                {preserveContext && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>}
+                            </div>
+                            <span className="text-xs text-slate-600">清空时保留最后10条记录 (维持语境)</span>
                         </div>
 
                         <div className="flex gap-2">
@@ -1197,7 +1199,7 @@ ${recentGroupMsgs}
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" /></svg>
                                 清空聊天
                             </button>
-                            <button onClick={() => { if(activeGroup) handleDeleteGroup(activeGroup.id); }} className="flex-1 py-3 text-white bg-red-500 hover:bg-red-600 rounded-2xl text-xs font-bold transition-colors shadow-lg shadow-red-200">解散群聊</button>
+                            <button onClick={() => { if (activeGroup) handleDeleteGroup(activeGroup.id); }} className="flex-1 py-3 text-white bg-red-500 hover:bg-red-600 rounded-2xl text-xs font-bold transition-colors shadow-lg shadow-red-200">解散群聊</button>
                         </div>
                     </div>
                 </div>

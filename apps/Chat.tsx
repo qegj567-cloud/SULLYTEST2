@@ -1,26 +1,31 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory } from '../types';
+import { Message, MessageType, MemoryFragment, Emoji, EmojiCategory, AppID } from '../types';
 import { processImage } from '../utils/file';
 import { safeResponseJson } from '../utils/safeApi';
 import { XhsMcpClient, extractNotesFromMcpData, normalizeNote } from '../utils/xhsMcpClient';
 import MessageItem from '../components/chat/MessageItem';
-import { PRESET_THEMES, DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
+import { PRESET_THEMES } from '../components/chat/ChatConstants';
+import { DEFAULT_ARCHIVE_PROMPTS } from '../constants/archivePrompts';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInputArea from '../components/chat/ChatInputArea';
 import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
 import { useChatAI } from '../hooks/useChatAI';
+import { useVoiceTts } from '../hooks/useVoiceTts';
+import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
+import { WhisperStt } from '../utils/whisperStt';
+import { haptic } from '../utils/haptics';
 
 const Chat: React.FC = () => {
-    const { characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, closeApp, customThemes, removeCustomTheme, addToast, userProfile, lastMsgTimestamp, groups, clearUnread, realtimeConfig } = useOS();
+    const { characters, activeCharacterId, setActiveCharacterId, updateCharacter, apiConfig, closeApp, openApp, customThemes, removeCustomTheme, addToast, userProfile, lastMsgTimestamp, groups, clearUnread, realtimeConfig, ttsConfig } = useOS();
     const [messages, setMessages] = useState<Message[]>([]);
     const [totalMsgCount, setTotalMsgCount] = useState(0);
     const [visibleCount, setVisibleCount] = useState(30);
     const [input, setInput] = useState('');
     const [showPanel, setShowPanel] = useState<'none' | 'actions' | 'emojis' | 'chars'>('none');
-    
+
     // Emoji State
     const [emojis, setEmojis] = useState<Emoji[]>([]);
     const [categories, setCategories] = useState<EmojiCategory[]>([]);
@@ -42,17 +47,18 @@ const Chat: React.FC = () => {
     const [emojiImportText, setEmojiImportText] = useState('');
     const [settingsContextLimit, setSettingsContextLimit] = useState(500);
     const [settingsHideSysLogs, setSettingsHideSysLogs] = useState(false);
-    const [preserveContext, setPreserveContext] = useState(true); 
+    const [preserveContext, setPreserveContext] = useState(true);
     const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
     const [selectedEmoji, setSelectedEmoji] = useState<Emoji | null>(null);
     const [selectedCategory, setSelectedCategory] = useState<EmojiCategory | null>(null); // For deletion modal
     const [editContent, setEditContent] = useState('');
     const [isSummarizing, setIsSummarizing] = useState(false);
+    const [transferActionMsg, setTransferActionMsg] = useState<Message | null>(null);
 
     // Archive Prompts State
-    const [archivePrompts, setArchivePrompts] = useState<{id: string, name: string, content: string}[]>(DEFAULT_ARCHIVE_PROMPTS);
+    const [archivePrompts, setArchivePrompts] = useState<{ id: string, name: string, content: string }[]>(DEFAULT_ARCHIVE_PROMPTS);
     const [selectedPromptId, setSelectedPromptId] = useState<string>('preset_rational');
-    const [editingPrompt, setEditingPrompt] = useState<{id: string, name: string, content: string} | null>(null);
+    const [editingPrompt, setEditingPrompt] = useState<{ id: string, name: string, content: string } | null>(null);
 
     // --- Multi-Select State ---
     const [selectionMode, setSelectionMode] = useState(false);
@@ -71,22 +77,57 @@ const Chat: React.FC = () => {
     // Which messages are currently showing "译" version (toggle state only, no API calls)
     const [showingTargetIds, setShowingTargetIds] = useState<Set<number>>(new Set());
 
+    // --- Timestamp State (per-character, theme can force-enable) ---
+    const [showTimestampSetting, setShowTimestampSetting] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(`chat_show_timestamp_${activeCharacterId}`) || 'false'); } catch { return false; }
+    });
+
+    // --- Voice TTS State ---
+    const { playingMsgId, loadingMsgIds, playVoice, stopVoice, synthesizeForMessage } = useVoiceTts();
+    const [autoTts, setAutoTts] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(`chat_auto_tts_${activeCharacterId}`) || 'false'); } catch { return false; }
+    });
+
+    // --- Voice Recording (STT) ---
+    const voiceRecorder = useVoiceRecorder();
+    const [sttProcessing, setSttProcessing] = useState(false);
+    const [transcribingMsgIds, setTranscribingMsgIds] = useState<Set<number>>(new Set());
+
+    // 录音错误可视化 — 移动端 title 属性不显示，需要 toast
+    useEffect(() => {
+        if (voiceRecorder.error) {
+            addToast(voiceRecorder.error, 'error');
+        }
+    }, [voiceRecorder.error]);
+
     const char = characters.find(c => c.id === activeCharacterId) || characters[0];
     const currentThemeId = char?.bubbleStyle || 'default';
     const activeTheme = useMemo(() => customThemes.find(t => t.id === currentThemeId) || PRESET_THEMES[currentThemeId] || PRESET_THEMES.default, [currentThemeId, customThemes]);
+
+    // Timestamp: theme can force-enable (e.g. WeChat), otherwise per-character user setting
+    const isTimestampForced = !!activeTheme.showTimestamp;
+    const effectiveShowTimestamp = isTimestampForced || showTimestampSetting;
+    const timestampInterval = activeTheme.timestampIntervalMs ?? 180000; // default 3 minutes
+
     const draftKey = `chat_draft_${activeCharacterId}`;
 
-    // Filter categories and emojis by active character's visibility (used for both AI prompt and UI)
-    const visibleCategories = useMemo(() => categories.filter(cat => {
+    // AI-visible categories: only those allowed for the active character (excludes __user__-only categories)
+    const aiVisibleCategories = useMemo(() => categories.filter(cat => {
         if (!cat.allowedCharacterIds || cat.allowedCharacterIds.length === 0) return true;
         return cat.allowedCharacterIds.includes(activeCharacterId);
     }), [categories, activeCharacterId]);
 
+    // User-visible categories: also includes categories marked with __user__
+    const userVisibleCategories = useMemo(() => categories.filter(cat => {
+        if (!cat.allowedCharacterIds || cat.allowedCharacterIds.length === 0) return true;
+        return cat.allowedCharacterIds.includes(activeCharacterId) || cat.allowedCharacterIds.includes('__user__');
+    }), [categories, activeCharacterId]);
+
     const aiVisibleEmojis = useMemo(() => {
-        const hiddenIds = new Set(categories.filter(c => !visibleCategories.some(vc => vc.id === c.id)).map(c => c.id));
+        const hiddenIds = new Set(categories.filter(c => !aiVisibleCategories.some(vc => vc.id === c.id)).map(c => c.id));
         if (hiddenIds.size === 0) return emojis;
         return emojis.filter(e => !e.categoryId || !hiddenIds.has(e.categoryId));
-    }, [emojis, categories, visibleCategories]);
+    }, [emojis, categories, aiVisibleCategories]);
 
     // --- Initialize Hook ---
     const { isTyping, recallStatus, searchStatus, diaryStatus, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI } = useChatAI({
@@ -95,13 +136,24 @@ const Chat: React.FC = () => {
         apiConfig,
         groups,
         emojis: aiVisibleEmojis,
-        categories: visibleCategories,
+        categories: aiVisibleCategories,
         addToast,
         setMessages,
         realtimeConfig,
         translationConfig: translationEnabled
             ? { enabled: true, sourceLang: translateSourceLang, targetLang: translateTargetLang }
-            : undefined
+            : undefined,
+        autoVoice: autoTts,
+        onVoiceMessageSaved: autoTts && ttsConfig?.apiKey ? (msgId: number, text: string) => {
+            // Fire-and-forget synthesis; reload from IDB when done to avoid stale closure
+            synthesizeForMessage(msgId, text, ttsConfig).then(async (result) => {
+                if (result) {
+                    // Update IDB first, then reload messages from DB (safe even if state changed)
+                    await DB.updateMessageMetadata(msgId, { duration: result.duration, hasAudio: true });
+                    await reloadMessages(visibleCountRef.current);
+                }
+            }).catch(err => console.error('[AutoTTS] synthesis failed:', err));
+        } : undefined,
     });
 
     const canReroll = !isTyping && messages.length > 0 && messages[messages.length - 1].role === 'assistant';
@@ -176,6 +228,14 @@ const Chat: React.FC = () => {
             setSelectionMode(false);
             setSelectedMsgIds(new Set());
             setShowingTargetIds(new Set());
+            // Per-character timestamp toggle
+            try {
+                setShowTimestampSetting(JSON.parse(localStorage.getItem(`chat_show_timestamp_${activeCharacterId}`) || 'false'));
+            } catch { setShowTimestampSetting(false); }
+            // Per-character auto TTS toggle
+            try {
+                setAutoTts(JSON.parse(localStorage.getItem(`chat_auto_tts_${activeCharacterId}`) || 'false'));
+            } catch { setAutoTts(false); }
         }
     }, [activeCharacterId, reloadMessages]);
 
@@ -198,7 +258,7 @@ const Chat: React.FC = () => {
                 const parsed = JSON.parse(savedPrompts);
                 const merged = [...DEFAULT_ARCHIVE_PROMPTS, ...parsed.filter((p: any) => !p.id.startsWith('preset_'))];
                 setArchivePrompts(merged);
-            } catch(e) {}
+            } catch (e) { }
         }
         const savedId = localStorage.getItem('chat_active_archive_prompt_id');
         if (savedId && archivePrompts.some(p => p.id === savedId)) setSelectedPromptId(savedId);
@@ -254,7 +314,7 @@ const Chat: React.FC = () => {
         const type = customType || 'text';
 
         if (!customContent) { setInput(''); localStorage.removeItem(draftKey); }
-        
+
         if (type === 'image') {
             const recentChat = messages.slice(-10).map(m => {
                 const sender = m.role === 'user' ? userProfile.name : char.name;
@@ -272,7 +332,7 @@ const Chat: React.FC = () => {
         }
 
         const msgPayload: any = { charId: char.id, role: 'user', type, content: text, metadata };
-        
+
         if (replyTarget) {
             msgPayload.replyTo = {
                 id: replyTarget.id,
@@ -283,6 +343,7 @@ const Chat: React.FC = () => {
         }
 
         await DB.saveMessage(msgPayload);
+        haptic.medium();
 
         // Detect XHS link in user text and create xhs_card via MCP
         if (type === 'text') {
@@ -360,6 +421,12 @@ const Chat: React.FC = () => {
             case 'select-category': setActiveCategory(payload); break;
             case 'category-options': setSelectedCategory(payload); setModalType('category-options'); break;
             case 'delete-category-req': setSelectedCategory(payload); setModalType('delete-category'); break;
+            case 'edit-theme':
+                if (payload) {
+                    window.sessionStorage.setItem('themeMakerEditId', payload);
+                    openApp(AppID.ThemeMaker);
+                }
+                break;
         }
     };
 
@@ -367,8 +434,8 @@ const Chat: React.FC = () => {
 
     const handleAddCategory = async () => {
         if (!newCategoryName.trim()) {
-             addToast('请输入分类名称', 'error');
-             return;
+            addToast('请输入分类名称', 'error');
+            return;
         }
         const newCat = { id: `cat-${Date.now()}`, name: newCategoryName.trim() };
         await DB.saveEmojiCategory(newCat);
@@ -416,7 +483,10 @@ const Chat: React.FC = () => {
         await DB.saveEmojiCategory({ ...cat, allowedCharacterIds });
         await loadEmojiData();
         setSelectedCategory(null);
-        addToast(allowedCharacterIds ? `已设置 ${allowedCharacterIds.length} 个角色可见` : '已设为所有角色可见', 'success');
+        const userCount = allowedCharacterIds?.filter(id => id !== '__user__').length ?? 0;
+        const includesUser = allowedCharacterIds?.includes('__user__');
+        const label = !allowedCharacterIds ? '已设为所有人可见' : includesUser && userCount === 0 ? '已设为仅用户可见' : `已设置 ${(includesUser ? userCount + 1 : userCount)} 个可见`;
+        addToast(label, 'success');
     };
 
     const handleSavePrompt = () => {
@@ -476,13 +546,13 @@ const Chat: React.FC = () => {
             const dataUrl = await processImage(file, { skipCompression: true });
             updateCharacter(char.id, { chatBackground: dataUrl });
             addToast('聊天背景已更新', 'success');
-        } catch(err: any) {
+        } catch (err: any) {
             addToast(err.message, 'error');
         }
     };
 
     const saveSettings = () => {
-        updateCharacter(char.id, { 
+        updateCharacter(char.id, {
             contextLimit: settingsContextLimit,
             hideSystemLogs: settingsHideSysLogs
         });
@@ -532,13 +602,13 @@ const Chat: React.FC = () => {
         const allMessages = await DB.getMessagesByCharId(char.id);
         const msgsByDate: Record<string, Message[]> = {};
         allMessages
-        .filter(m => !char.hideBeforeMessageId || m.id >= char.hideBeforeMessageId)
-        .forEach(m => {
-            const d = new Date(m.timestamp);
-            const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-            if (!msgsByDate[dateStr]) msgsByDate[dateStr] = [];
-            msgsByDate[dateStr].push(m);
-        });
+            .filter(m => !char.hideBeforeMessageId || m.id >= char.hideBeforeMessageId)
+            .forEach(m => {
+                const d = new Date(m.timestamp);
+                const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                if (!msgsByDate[dateStr]) msgsByDate[dateStr] = [];
+                msgsByDate[dateStr].push(m);
+            });
 
         const datesToProcess = Object.keys(msgsByDate).sort();
         if (datesToProcess.length === 0) {
@@ -549,7 +619,7 @@ const Chat: React.FC = () => {
         setIsSummarizing(true);
         setShowPanel('none');
         setModalType('none');
-        
+
         try {
             let processedCount = 0;
             const newMemories: MemoryFragment[] = [];
@@ -559,7 +629,7 @@ const Chat: React.FC = () => {
             for (const dateStr of datesToProcess) {
                 const dayMsgs = msgsByDate[dateStr];
                 const rawLog = dayMsgs.map(m => `[${formatTime(m.timestamp)}] ${m.role === 'user' ? userProfile.name : char.name}: ${m.type === 'image' ? '[Image]' : m.content}`).join('\n');
-                
+
                 let prompt = template;
                 prompt = prompt.replace(/\$\{dateStr\}/g, dateStr);
                 prompt = prompt.replace(/\$\{char\.name\}/g, char.name);
@@ -573,14 +643,14 @@ const Chat: React.FC = () => {
                         model: apiConfig.model,
                         messages: [{ role: "user", content: prompt }],
                         temperature: 0.5,
-                        max_tokens: 8000 
+                        max_tokens: 8000
                     })
                 });
 
                 if (!response.ok) throw new Error(`API Error on ${dateStr}`);
                 const data = await safeResponseJson(response);
                 let summary = data.choices?.[0]?.message?.content || '';
-                summary = summary.trim().replace(/^["']|["']$/g, ''); 
+                summary = summary.trim().replace(/^["']|["']$/g, '');
 
                 if (summary) {
                     newMemories.push({ id: `mem-${Date.now()}`, date: dateStr, summary: summary, mood: 'archive' });
@@ -603,6 +673,10 @@ const Chat: React.FC = () => {
     // --- Message Management ---
     const handleDeleteMessage = async () => {
         if (!selectedMessage) return;
+        // P7: Clean up voice audio blob from IDB if this is a voice message
+        if (selectedMessage.type === 'voice') {
+            await DB.deleteVoiceAudio(selectedMessage.id);
+        }
         await DB.deleteMessage(selectedMessage.id);
         setMessages(prev => prev.filter(m => m.id !== selectedMessage.id));
         setTotalMsgCount(prev => Math.max(0, prev - 1));
@@ -636,6 +710,97 @@ const Chat: React.FC = () => {
         setSelectedMessage(null);
         addToast('已复制到剪贴板', 'success');
     };
+
+    // --- Voice: Read Aloud ---
+    const handleReadAloud = useCallback(async () => {
+        if (!selectedMessage || !ttsConfig?.apiKey) {
+            addToast('请先在设置中配置 TTS', 'error');
+            setModalType('none');
+            return;
+        }
+        const msg = selectedMessage;
+        setModalType('none');
+        setSelectedMessage(null);
+
+        console.log('[ReadAloud] Starting TTS for msg:', msg.id, 'text:', msg.content.slice(0, 50));
+        console.log('[ReadAloud] ttsConfig:', JSON.stringify({ baseUrl: ttsConfig.baseUrl, model: ttsConfig.model, hasApiKey: !!ttsConfig.apiKey, groupId: ttsConfig.groupId?.slice(0, 6) + '...' }));
+
+        // Create a placeholder voice message immediately
+        const voiceMsg: any = {
+            charId: char.id,
+            role: msg.role,
+            type: 'voice' as MessageType,
+            content: msg.content,
+            metadata: { duration: 0, sourceText: msg.content, hasAudio: false, source: 'read-aloud' },
+        };
+        const savedId = await DB.saveMessage(voiceMsg);
+        await reloadMessages(visibleCountRef.current);
+
+        // Synthesize in background
+        try {
+            const result = await synthesizeForMessage(savedId, msg.content, ttsConfig);
+            if (result) {
+                await DB.updateMessageMetadata(savedId, { duration: result.duration, hasAudio: true, sourceText: msg.content });
+                setMessages(prev => prev.map(m => m.id === savedId ? { ...m, metadata: { ...m.metadata, duration: result.duration, hasAudio: true } } : m));
+                addToast('语音合成完成', 'success');
+            } else {
+                addToast('TTS 合成失败（结果为空）', 'error');
+            }
+        } catch (err: any) {
+            console.error('[ReadAloud] TTS error:', err);
+            addToast(`TTS 合成失败: ${err?.message || err}`, 'error');
+        }
+    }, [selectedMessage, ttsConfig, char, synthesizeForMessage, reloadMessages]);
+
+    // --- Voice: Convert to Text ---
+    const handleVoiceToText = useCallback(() => {
+        if (!selectedMessage || selectedMessage.type !== 'voice') return;
+        const sourceText = selectedMessage.metadata?.sourceText || selectedMessage.content;
+        addToast(sourceText.length > 60 ? sourceText.substring(0, 60) + '...' : sourceText, 'info');
+        setModalType('none');
+        setSelectedMessage(null);
+    }, [selectedMessage, addToast]);
+
+    // --- Voice: Download Audio ---
+    const handleDownloadVoice = useCallback(async () => {
+        if (!selectedMessage || selectedMessage.type !== 'voice') return;
+        const msgId = selectedMessage.id;
+        setModalType('none');
+        setSelectedMessage(null);
+
+        const blob = await DB.getVoiceAudio(msgId);
+        if (!blob) {
+            addToast('音频文件不存在', 'error');
+            return;
+        }
+
+        const filename = `voice_${char.name}_${new Date().toISOString().slice(0, 10)}_${msgId}.mp3`;
+
+        // Try navigator.share first (works on mobile PWA)
+        if (navigator.share && navigator.canShare) {
+            try {
+                const file = new File([blob], filename, { type: blob.type || 'audio/mpeg' });
+                if (navigator.canShare({ files: [file] })) {
+                    await navigator.share({ files: [file] });
+                    return;
+                }
+            } catch (err: any) {
+                // User cancelled share or not supported — fall through to download
+                if (err?.name === 'AbortError') return;
+            }
+        }
+
+        // Fallback: create <a> download link
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        addToast('语音已保存', 'success');
+    }, [selectedMessage, char, addToast]);
 
     const handleDeleteEmoji = async () => {
         if (!selectedEmoji) return;
@@ -671,9 +836,34 @@ const Chat: React.FC = () => {
         setModalType('message-options');
     }, []);
 
+    // --- Transfer Action ---
+    const handleTransferAction = useCallback((msg: Message) => {
+        setTransferActionMsg(msg);
+    }, []);
+
+    const handleTransferStatusUpdate = async (status: 'accepted' | 'returned') => {
+        if (!transferActionMsg || !char) return;
+        await DB.updateMessageMetadata(transferActionMsg.id, { status });
+        // Update local state immediately
+        setMessages(prev => prev.map(m => m.id === transferActionMsg.id ? { ...m, metadata: { ...m.metadata, status } } : m));
+        setTransferActionMsg(null);
+        const isFromUser = transferActionMsg.role === 'user';
+        const amt = transferActionMsg.metadata?.amount || '?';
+        if (status === 'accepted') {
+            addToast(isFromUser ? `${char.name} 已收取 ¥${amt}` : `你已收取 ¥${amt}`, 'success');
+        } else {
+            addToast(isFromUser ? `${char.name} 已退还 ¥${amt}` : `你已退还 ¥${amt}`, 'info');
+        }
+    };
+
     const handleBatchDelete = async () => {
         if (selectedMsgIds.size === 0) return;
         const deleteCount = selectedMsgIds.size;
+        // P7: Clean up voice audio blobs for any voice messages being deleted
+        const voiceMsgIds = messages.filter(m => selectedMsgIds.has(m.id) && m.type === 'voice').map(m => m.id);
+        for (const vid of voiceMsgIds) {
+            await DB.deleteVoiceAudio(vid);
+        }
         await DB.deleteMessages(Array.from(selectedMsgIds));
         setMessages(prev => prev.filter(m => !selectedMsgIds.has(m.id)));
         setTotalMsgCount(prev => Math.max(0, prev - deleteCount));
@@ -715,6 +905,7 @@ const Chat: React.FC = () => {
                 role: m.role,
                 type: m.type,
                 content: m.content,
+                metadata: m.metadata,
                 timestamp: m.timestamp || Date.now()
             }))
         };
@@ -757,16 +948,16 @@ const Chat: React.FC = () => {
 
     // Reset active category if it becomes invisible for the current character
     useEffect(() => {
-        if (activeCategory !== 'default' && visibleCategories.length > 0 && !visibleCategories.some(c => c.id === activeCategory)) {
+        if (activeCategory !== 'default' && userVisibleCategories.length > 0 && !userVisibleCategories.some(c => c.id === activeCategory)) {
             setActiveCategory('default');
         }
-    }, [visibleCategories, activeCategory]);
+    }, [userVisibleCategories, activeCategory]);
 
-    // Build a set of hidden category IDs for quick lookup
+    // Build a set of hidden category IDs for quick lookup (user panel perspective)
     const hiddenCategoryIds = useMemo(() => {
-        const visible = new Set(visibleCategories.map(c => c.id));
+        const visible = new Set(userVisibleCategories.map(c => c.id));
         return new Set(categories.filter(c => !visible.has(c.id)).map(c => c.id));
-    }, [categories, visibleCategories]);
+    }, [categories, userVisibleCategories]);
 
     // Memoize filtered emojis for ChatInputArea
     const filteredEmojis = useMemo(() => emojis.filter(e => {
@@ -780,18 +971,95 @@ const Chat: React.FC = () => {
     const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget]);
     const handleCharSelectCallback = useCallback((id: string) => { setActiveCharacterId(id); setShowPanel('none'); }, []);
 
+    // --- Voice Recording → STT → AI Handler ---
+    const handleVoiceRecordMessage = useCallback(async (blob: Blob, duration: number) => {
+        if (!char) return;
+        haptic.medium();
+
+        try {
+            // 1. Save user voice message (visual bubble) immediately
+            const voiceMsgId = await DB.saveMessage({
+                charId: char.id,
+                role: 'user',
+                type: 'voice',
+                content: '', // will be filled with transcribed text
+                metadata: {
+                    duration,
+                    source: 'user-recording',
+                    hasAudio: true,
+                    sttStatus: 'pending',
+                    transcribedText: '',
+                },
+            });
+
+            // 2. Save audio blob to IDB
+            await DB.saveVoiceAudio(voiceMsgId, blob);
+
+            // 3. Update UI immediately — user sees their voice bubble
+            const updatedMsgs = await DB.getMessagesByCharId(char.id);
+            setMessages(updatedMsgs);
+
+            // Mark as transcribing
+            setTranscribingMsgIds(prev => new Set(prev).add(voiceMsgId));
+            setSttProcessing(true);
+
+            // 4. Run Whisper STT in background
+            let transcribedText = '';
+            try {
+                const result = await WhisperStt.transcribe(blob, 'tiny', (progress) => {
+                    if (progress.status === 'progress' && progress.progress !== undefined) {
+                        console.log(`🎤 [STT] Model download: ${progress.progress.toFixed(0)}%`);
+                    }
+                });
+                transcribedText = result.text;
+            } catch (sttErr) {
+                console.error('🎤 [STT] Transcription failed:', sttErr);
+                addToast('语音识别失败，请重试', 'error');
+                // Update message status to failed
+                await DB.updateMessageMetadata(voiceMsgId, { sttStatus: 'failed' });
+                setTranscribingMsgIds(prev => { const s = new Set(prev); s.delete(voiceMsgId); return s; });
+                setSttProcessing(false);
+                return;
+            }
+
+            if (!transcribedText.trim()) {
+                addToast('未识别到语音内容', 'error');
+                await DB.updateMessageMetadata(voiceMsgId, { sttStatus: 'failed' });
+                setTranscribingMsgIds(prev => { const s = new Set(prev); s.delete(voiceMsgId); return s; });
+                setSttProcessing(false);
+                return;
+            }
+
+            // 5. Update voice message with transcribed text
+            await DB.updateMessage(voiceMsgId, transcribedText);
+            await DB.updateMessageMetadata(voiceMsgId, { sttStatus: 'done', transcribedText });
+
+            setTranscribingMsgIds(prev => { const s = new Set(prev); s.delete(voiceMsgId); return s; });
+            setSttProcessing(false);
+
+            // 6. Trigger AI (re-fetch messages to include updated voice msg)
+            const latestMsgs = await DB.getMessagesByCharId(char.id);
+            setMessages(latestMsgs);
+            triggerAI(latestMsgs);
+        } catch (err) {
+            console.error('🎤 [VoiceRecord] Error:', err);
+            addToast('语音消息发送失败', 'error');
+            setSttProcessing(false);
+        }
+    }, [char, addToast, triggerAI]);
+
     return (
-        <div 
-            className="flex flex-col h-full bg-[#f1f5f9] overflow-hidden relative font-sans transition-[background-image] duration-500"
-            style={{ 
+        <div
+            className={`sully-chat-container flex flex-col h-full bg-[#f1f5f9] overflow-hidden relative font-sans transition-[background-image] duration-500 theme-${activeTheme.baseThemeId || activeTheme.id}`}
+            style={{
                 backgroundImage: char.chatBackground ? `url(${char.chatBackground})` : 'none',
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
             }}
         >
-             {activeTheme.customCss && <style>{activeTheme.customCss}</style>}
+            {activeTheme.customCss && <style>{activeTheme.customCss}</style>}
 
-             <ChatModals 
+            <ChatModals
                 modalType={modalType} setModalType={setModalType}
                 transferAmt={transferAmt} setTransferAmt={setTransferAmt}
                 emojiImportText={emojiImportText} setEmojiImportText={setEmojiImportText}
@@ -803,11 +1071,17 @@ const Chat: React.FC = () => {
                 editingPrompt={editingPrompt} setEditingPrompt={setEditingPrompt} isSummarizing={isSummarizing}
                 selectedMessage={selectedMessage} selectedEmoji={selectedEmoji} activeCharacter={char} messages={messages}
                 allHistoryMessages={allHistoryMessages}
-                
+
                 newCategoryName={newCategoryName} setNewCategoryName={setNewCategoryName} onAddCategory={handleAddCategory}
                 selectedCategory={selectedCategory}
 
-                onTransfer={() => { if(transferAmt) handleSendText(`[转账]`, 'transfer', { amount: transferAmt }); setModalType('none'); }}
+                onTransfer={() => {
+                    const amt = parseFloat(transferAmt);
+                    if (!transferAmt || isNaN(amt) || amt <= 0) { addToast('请输入有效金额', 'error'); return; }
+                    handleSendText(`[转账]`, 'transfer', { amount: amt.toFixed(2), status: 'pending' });
+                    setTransferAmt('');
+                    setModalType('none');
+                }}
                 onImportEmoji={handleImportEmoji}
                 onSaveSettings={saveSettings} onBgUpload={handleBgUpload} onRemoveBg={() => updateCharacter(char.id, { chatBackground: undefined })}
                 onClearHistory={handleClearHistory} onArchive={handleFullArchive}
@@ -824,9 +1098,30 @@ const Chat: React.FC = () => {
                 onSetTranslateLang={(lang: string) => { setTranslateTargetLang(lang); localStorage.setItem('chat_translate_lang', lang); setShowingTargetIds(new Set()); }}
                 xhsEnabled={!!char.xhsEnabled}
                 onToggleXhs={() => updateCharacter(char.id, { xhsEnabled: !char.xhsEnabled })}
-             />
-             
-             <ChatHeader 
+                showTimestampSetting={isTimestampForced || showTimestampSetting}
+                isTimestampForced={isTimestampForced}
+                onToggleTimestamp={() => {
+                    if (isTimestampForced) return;
+                    const next = !showTimestampSetting;
+                    setShowTimestampSetting(next);
+                    localStorage.setItem(`chat_show_timestamp_${activeCharacterId}`, JSON.stringify(next));
+                }}
+                onReadAloud={ttsConfig?.apiKey ? handleReadAloud : undefined}
+                onVoiceToText={handleVoiceToText}
+                onDownloadVoice={handleDownloadVoice}
+                autoTts={autoTts}
+                onToggleAutoTts={() => {
+                    if (!autoTts && !ttsConfig?.apiKey) {
+                        addToast('请先在全局设置中配置 TTS API Key', 'error');
+                        return;
+                    }
+                    const next = !autoTts;
+                    setAutoTts(next);
+                    localStorage.setItem(`chat_auto_tts_${activeCharacterId}`, JSON.stringify(next));
+                }}
+            />
+
+            <ChatHeader
                 selectionMode={selectionMode}
                 selectedCount={selectedMsgIds.size}
                 onCancelSelection={() => { setSelectionMode(false); setSelectedMsgIds(new Set()); }}
@@ -838,7 +1133,7 @@ const Chat: React.FC = () => {
                 onClose={closeApp}
                 onTriggerAI={() => triggerAI(messages)}
                 onShowCharsPanel={() => setShowPanel('chars')}
-             />
+            />
 
             <div ref={scrollRef} className="flex-1 overflow-y-auto pt-6 pb-6 no-scrollbar" style={{ backgroundImage: activeTheme.type === 'custom' && activeTheme.user.backgroundImage ? 'none' : undefined }}>
                 {collapsedCount > 0 && (
@@ -855,6 +1150,8 @@ const Chat: React.FC = () => {
                 {displayMessages.map((m, i) => {
                     const prevRole = i > 0 ? displayMessages[i - 1].role : null;
                     const nextRole = i < displayMessages.length - 1 ? displayMessages[i + 1].role : null;
+                    const prevMsg = i > 0 ? displayMessages[i - 1] : null;
+                    const showTs = effectiveShowTimestamp && (!prevMsg || (m.timestamp - prevMsg.timestamp) >= timestampInterval);
                     return (
                         <MessageItem
                             key={m.id || i}
@@ -872,14 +1169,38 @@ const Chat: React.FC = () => {
                             translationEnabled={translationEnabled && m.type === 'text' && m.role === 'assistant'}
                             isShowingTarget={showingTargetIds.has(m.id)}
                             onTranslateToggle={handleTranslateToggle}
+                            onTransferAction={handleTransferAction}
+                            showTimestamp={showTs}
+                            timestampValue={m.timestamp}
+                            onPlayVoice={playVoice}
+                            onStopVoice={stopVoice}
+                            onRetryVoice={ttsConfig?.apiKey ? (msgId: number) => {
+                                const msg = messages.find(m => m.id === msgId);
+                                if (!msg || !ttsConfig) return;
+                                const text = msg.metadata?.sourceText || msg.content;
+                                synthesizeForMessage(msgId, text, ttsConfig).then(async (result) => {
+                                    if (result) {
+                                        await DB.updateMessageMetadata(msgId, { duration: result.duration, hasAudio: true });
+                                        await reloadMessages(visibleCountRef.current);
+                                        addToast('语音合成完成', 'success');
+                                    }
+                                }).catch(err => {
+                                    console.error('[RetryVoice] synthesis failed:', err);
+                                    addToast(`重试合成失败: ${err?.message || err}`, 'error');
+                                });
+                            } : undefined}
+                            playingMsgId={playingMsgId}
+                            loadingMsgIds={loadingMsgIds}
                         />
                     );
                 })}
-                
+
                 {(isTyping || recallStatus || searchStatus || diaryStatus) && !selectionMode && (
-                    <div className="flex items-end gap-3 px-3 mb-6 animate-fade-in">
-                        <img src={char.avatar} className="w-9 h-9 rounded-[10px] object-cover" />
-                        <div className="bg-white px-4 py-3 rounded-2xl shadow-sm">
+                    <div className="flex items-start gap-2.5 px-3 mb-4 animate-fade-in">
+                        <img src={char.avatar} className="w-9 h-9 rounded-[4px] object-cover bg-slate-200" />
+                        <div className="sully-typing-bubble bg-white px-3 py-2 rounded-lg shadow-sm relative">
+                            {/* Typing indicator tail */}
+                            <svg className="sully-typing-tail absolute top-[12px] -left-[5.5px] w-[6px] h-[10px] pointer-events-none" style={{ fill: '#ffffff' }}><polygon points="6,0 0,5 6,10" /></svg>
                             {searchStatus ? (
                                 <div className="flex items-center gap-2 text-xs text-emerald-500 font-medium">
                                     <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -910,7 +1231,7 @@ const Chat: React.FC = () => {
                         <button onClick={() => setReplyTarget(null)} className="p-1 text-slate-400 hover:text-slate-600">×</button>
                     </div>
                 )}
-                
+
                 <ChatInputArea
                     input={input} setInput={handleInputChange}
                     isTyping={isTyping} selectionMode={selectionMode}
@@ -927,10 +1248,18 @@ const Chat: React.FC = () => {
                     onPanelAction={handlePanelAction}
                     onImageSelect={handleImageSelect}
                     isSummarizing={isSummarizing}
-                    categories={visibleCategories}
+                    categories={userVisibleCategories}
                     activeCategory={activeCategory}
                     onReroll={handleReroll}
                     canReroll={canReroll}
+                    onVoiceMessage={handleVoiceRecordMessage}
+                    voiceRecorderState={sttProcessing ? 'processing' : voiceRecorder.state}
+                    voiceRecordingDuration={voiceRecorder.duration}
+                    onStartRecording={voiceRecorder.startRecording}
+                    onStopRecording={voiceRecorder.stopRecording}
+                    onCancelRecording={voiceRecorder.cancelRecording}
+                    voiceRecorderError={voiceRecorder.error}
+                    isVoiceProcessing={sttProcessing}
                 />
             </div>
 
@@ -956,6 +1285,50 @@ const Chat: React.FC = () => {
                         <div className="text-center text-xs text-slate-400 py-8">没有其他角色可以转发</div>
                     )}
                 </div>
+            </Modal>
+
+            {/* Transfer Action Modal */}
+            <Modal isOpen={!!transferActionMsg} title="转账详情" onClose={() => setTransferActionMsg(null)}>
+                {transferActionMsg && (
+                    <div className="flex flex-col items-center gap-4 py-2">
+                        <div className="w-14 h-14 rounded-full bg-[#f3883b]/10 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#f3883b" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className="w-7 h-7"><path d="M17 2l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="M7 22l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-2xl font-bold text-slate-800">¥{transferActionMsg.metadata?.amount || '0.00'}</div>
+                            <div className="text-xs text-slate-400 mt-1">
+                                {transferActionMsg.role === 'user' ? `你转账给${char.name}` : `${char.name}转账给你`}
+                            </div>
+                        </div>
+                        <div className="w-full space-y-2 mt-2">
+                            {transferActionMsg.role === 'user' ? (
+                                /* User sent this transfer — only allow withdraw */
+                                <button
+                                    onClick={() => handleTransferStatusUpdate('returned')}
+                                    className="w-full py-3 bg-slate-100 text-slate-600 font-medium rounded-2xl active:scale-[0.98] transition-transform"
+                                >
+                                    撤回转账
+                                </button>
+                            ) : (
+                                /* AI sent this transfer — allow accept or return */
+                                <>
+                                    <button
+                                        onClick={() => handleTransferStatusUpdate('accepted')}
+                                        className="w-full py-3 bg-[#07c160] text-white font-bold rounded-2xl active:scale-[0.98] transition-transform shadow-sm"
+                                    >
+                                        确认收款
+                                    </button>
+                                    <button
+                                        onClick={() => handleTransferStatusUpdate('returned')}
+                                        className="w-full py-3 bg-slate-100 text-slate-600 font-medium rounded-2xl active:scale-[0.98] transition-transform"
+                                    >
+                                        退还
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                )}
             </Modal>
         </div>
     );

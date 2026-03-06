@@ -8,7 +8,7 @@ export const ChatPrompts = {
     // 格式化时间戳
     formatDate: (ts: number) => {
         const d = new Date(ts);
-        return `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+        return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
     },
 
     // 格式化时间差提示
@@ -19,7 +19,7 @@ export const ChatPrompts = {
         const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
         const currentHour = new Date(currentTimestamp).getHours();
         const isNight = currentHour >= 23 || currentHour <= 6;
-        if (diffMins < 10) return ''; 
+        if (diffMins < 10) return '';
         if (diffMins < 60) return `[系统提示: 距离上一条消息: ${diffMins} 分钟。短暂的停顿。]`;
         if (diffHours < 6) {
             if (isNight) return `[系统提示: 距离上一条消息: ${diffHours} 小时。现在是深夜/清晨。沉默是正常的（正在睡觉）。]`;
@@ -33,17 +33,17 @@ export const ChatPrompts = {
     // 构建表情包上下文
     buildEmojiContext: (emojis: Emoji[], categories: EmojiCategory[]) => {
         if (emojis.length === 0) return '无';
-        
+
         const grouped: Record<string, string[]> = {};
         const catMap: Record<string, string> = { 'default': '通用' };
         categories.forEach(c => catMap[c.id] = c.name);
-        
+
         emojis.forEach(e => {
             const cid = e.categoryId || 'default';
             if (!grouped[cid]) grouped[cid] = [];
             grouped[cid].push(e.name);
         });
-        
+
         return Object.entries(grouped).map(([cid, names]) => {
             const cName = catMap[cid] || '其他';
             return `${cName}: [${names.join(', ')}]`;
@@ -99,7 +99,7 @@ export const ChatPrompts = {
                 if (recentGroupMsgs.length > 0) {
                     // 这里简化了 UserProfile 查找，假设非 User 即 Member
                     const groupLogStr = recentGroupMsgs.map(m => {
-                        const dateStr = new Date(m.timestamp).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+                        const dateStr = new Date(m.timestamp).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
                         return `[${dateStr}] [Group: ${m.groupName}] ${m.role === 'user' ? userProfile.name : 'Member'}: ${m.content}`;
                     }).join('\n');
                     baseSystemPrompt += `\n### [Background Context: Recent Group Activities]\n(注意：你是以下群聊的成员...)\n${groupLogStr}\n`;
@@ -207,6 +207,8 @@ export const ChatPrompts = {
 6. **可用动作**:
    - 回戳用户: \`[[ACTION:POKE]]\`
    - 转账: \`[[ACTION:TRANSFER:100]]\`
+   - 收取转账: 当用户给你转账且你愿意收下时，输出 \`[[ACTION:RECEIVE_TRANSFER]]\`。系统会自动找到最近一条等待中的用户转账并更新状态。
+   - 退还转账: 当用户给你转账但你不想要/觉得不合适时，输出 \`[[ACTION:RETURN_TRANSFER]]\`。系统会自动退还最近一条等待中的用户转账。
    - 调取记忆: \`[[RECALL: YYYY-MM]]\`，请注意，当用户提及具体某个月份时，或者当你想仔细想某个月份的事情时，欢迎你随时使该动作
    - **添加纪念日**: 如果你觉得今天是个值得纪念的日子（或者你们约定了某天），你可以**主动**将它添加到用户的日历中。单独起一行输出: \`[[ACTION:ADD_EVENT | 标题(Title) | YYYY-MM-DD]]\`。
    - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。
@@ -477,16 +479,18 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
 
     // 格式化消息历史
     buildMessageHistory: (
-        messages: Message[], 
-        limit: number, 
-        char: CharacterProfile, 
-        userProfile: UserProfile, 
+        messages: Message[],
+        limit: number,
+        char: CharacterProfile,
+        userProfile: UserProfile,
         emojis: Emoji[]
     ) => {
         // Filter Logic
         const effectiveHistory = messages.filter(m => !char.hideBeforeMessageId || m.id >= char.hideBeforeMessageId);
-        const historySlice = effectiveHistory.slice(-limit);
-        
+        // Exclude voice messages — their text content is already covered by the paired text message
+        const nonVoiceHistory = effectiveHistory.filter(m => m.type !== 'voice');
+        const historySlice = nonVoiceHistory.slice(-limit);
+
         let timeGapHint = "";
         if (historySlice.length >= 2) {
             const lastMsg = historySlice[historySlice.length - 2];
@@ -498,19 +502,27 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
             apiMessages: historySlice.map((m, index) => {
                 let content: any = m.content;
                 const timeStr = `[${ChatPrompts.formatDate(m.timestamp)}]`;
-                
+
                 if (m.replyTo) content = `[回复 "${m.replyTo.content.substring(0, 50)}..."]: ${content}`;
-                
+
                 if (m.type === 'image') {
-                     let textPart = `${timeStr} [User sent an image]`;
-                     if (index === historySlice.length - 1 && timeGapHint && m.role === 'user') textPart += `\n\n${timeGapHint}`;
-                     return { role: m.role, content: [{ type: "text", text: textPart }, { type: "image_url", image_url: { url: m.content } }] };
+                    let textPart = `${timeStr} [User sent an image]`;
+                    if (index === historySlice.length - 1 && timeGapHint && m.role === 'user') textPart += `\n\n${timeGapHint}`;
+                    return { role: m.role, content: [{ type: "text", text: textPart }, { type: "image_url", image_url: { url: m.content } }] };
                 }
-                
-                if (index === historySlice.length - 1 && timeGapHint && m.role === 'user') content = `${content}\n\n${timeGapHint}`; 
-                
-                if (m.type === 'interaction') content = `${timeStr} [系统: 用户戳了你一下]`; 
-                else if (m.type === 'transfer') content = `${timeStr} [系统: 用户转账 ${m.metadata?.amount}]`;
+
+                if (index === historySlice.length - 1 && timeGapHint && m.role === 'user') content = `${content}\n\n${timeGapHint}`;
+
+                if (m.type === 'interaction') content = `${timeStr} [系统: 用户戳了你一下]`;
+                else if (m.type === 'transfer') {
+                    const amt = m.metadata?.amount || '?';
+                    const status = m.metadata?.status || 'pending';
+                    const isFromUser = m.role === 'user';
+                    const statusMap: Record<string, string> = isFromUser
+                        ? { pending: `用户给你转账 ¥${amt}，等待你收款`, accepted: `你已收取用户的 ¥${amt} 转账`, returned: `你已退还用户的 ¥${amt} 转账` }
+                        : { pending: `你给用户转账 ¥${amt}，等待用户收款`, accepted: `用户已收取你的 ¥${amt} 转账`, returned: `用户已退还你的 ¥${amt} 转账` };
+                    content = `${timeStr} [系统: ${statusMap[status] || statusMap.pending}]`;
+                }
                 else if (m.type === 'social_card') {
                     const post = m.metadata?.post || {};
                     const commentsSample = (post.comments || []).map((c: any) => `${c.authorName}: ${c.content}`).join(' | ');
@@ -522,8 +534,8 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     content = `${timeStr} [${sender}分享了小红书笔记]\n标题: ${note.title || '无标题'}\n作者: ${note.author || '未知'}\n赞: ${note.likes || 0}\n简介: ${note.desc || '无'}\n${m.role === 'user' ? '(请根据你的性格对这个帖子发表看法)' : ''}`;
                 }
                 else if (m.type === 'emoji') {
-                     const stickerName = emojis.find(e => e.url === m.content)?.name || 'Image/Sticker';
-                     content = `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了表情包: ${stickerName}]`;
+                    const stickerName = emojis.find(e => e.url === m.content)?.name || 'Image/Sticker';
+                    content = `${timeStr} [${m.role === 'user' ? '用户' : '你'} 发送了表情包: ${stickerName}]`;
                 }
                 else if ((m.type as string) === 'chat_forward') {
                     try {
@@ -539,7 +551,7 @@ ${xhsEnabled ? `${[notionEnabled, feishuEnabled, notionNotesEnabled].filter(Bool
                     }
                 }
                 else content = `${timeStr} ${content}`;
-                
+
                 return { role: m.role, content };
             }),
             historySlice // Return original slice for Quote lookup

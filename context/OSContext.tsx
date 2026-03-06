@@ -1,183 +1,127 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
-import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, Message, RealtimeConfig } from '../types';
+import { APIConfig, AppID, OSTheme, CharacterProfile, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, Message, RealtimeConfig, TtsConfig, DEFAULT_TTS_CONFIG } from '../types';
 import { DB } from '../utils/db';
+import { onSystemLog } from '../utils/systemInterceptor';
+import { exportSystemData, importSystemData, ExportStateSnapshot, ImportCallbacks } from '../utils/systemBackup';
+import { haptic, setHapticsEnabled as setHapticsEnabledGlobal, getHapticsEnabled } from '../utils/haptics';
 
+// Sub-contexts
+import { NotificationProvider, useNotification, NotificationContextType } from './NotificationContext';
+import { AppProvider, useApp, AppContextType } from './AppContext';
 
-type JSZipLike = {
-  folder: (name: string) => { file: (name: string, data: string, options?: { base64?: boolean }) => void } | null;
-  file: (name: string) => { async: (type: 'string') => Promise<string> } | null;
-  generateAsync: (options: { type: 'blob' }, onUpdate?: (metadata: { percent: number }) => void) => Promise<Blob>;
-};
-
-type JSZipCtorLike = {
-  new (): JSZipLike;
-  loadAsync: (file: File) => Promise<JSZipLike>;
-};
-
-const dynamicImport = new Function('m', 'return import(m)') as (m: string) => Promise<any>;
-let jszipCtorPromise: Promise<JSZipCtorLike> | null = null;
-
-const loadScript = (src: string): Promise<void> => new Promise((resolve, reject) => {
-  const existing = document.querySelector(`script[data-src=\"${src}\"]`) as HTMLScriptElement | null;
-  if (existing) {
-    if ((existing as any).dataset.loaded === 'true') {
-      resolve();
-      return;
-    }
-    existing.addEventListener('load', () => resolve(), { once: true });
-    existing.addEventListener('error', () => reject(new Error(`load failed: ${src}`)), { once: true });
-    return;
-  }
-
-  const script = document.createElement('script');
-  script.src = src;
-  script.async = true;
-  script.dataset.src = src;
-  script.onload = () => {
-    script.dataset.loaded = 'true';
-    resolve();
-  };
-  script.onerror = () => reject(new Error(`load failed: ${src}`));
-  document.head.appendChild(script);
-});
-
-const loadJSZip = async (): Promise<JSZipCtorLike> => {
-  if (!jszipCtorPromise) {
-    jszipCtorPromise = dynamicImport('jszip')
-      .then((mod) => ((mod as any).default || mod) as JSZipCtorLike)
-      .catch(async () => {
-        await loadScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
-        const ctor = (window as any).JSZip as JSZipCtorLike | undefined;
-        if (!ctor) throw new Error('JSZip 加载失败');
-        return ctor;
-      });
-  }
-  return jszipCtorPromise;
-};
 
 // 默认实时配置
 const defaultRealtimeConfig: RealtimeConfig = {
-  weatherEnabled: false,
-  weatherApiKey: '',
-  weatherCity: 'Beijing',
-  newsEnabled: false,
-  newsApiKey: '',
-  notionEnabled: false,
-  notionApiKey: '',
-  notionDatabaseId: '',
-  feishuEnabled: false,
-  feishuAppId: '',
-  feishuAppSecret: '',
-  feishuBaseId: '',
-  feishuTableId: '',
-  cacheMinutes: 30
+    weatherEnabled: false,
+    weatherApiKey: '',
+    weatherCity: 'Beijing',
+    newsEnabled: false,
+    newsApiKey: '',
+    notionEnabled: false,
+    notionApiKey: '',
+    notionDatabaseId: '',
+    feishuEnabled: false,
+    feishuAppId: '',
+    feishuAppSecret: '',
+    feishuBaseId: '',
+    feishuTableId: '',
+    xhsEnabled: false,
+    cacheMinutes: 30
 };
 
-interface OSContextType {
-  activeApp: AppID;
-  openApp: (appId: AppID) => void;
-  closeApp: () => void;
-  theme: OSTheme;
-  updateTheme: (updates: Partial<OSTheme>) => void;
-  virtualTime: VirtualTime;
-  apiConfig: APIConfig;
-  updateApiConfig: (updates: Partial<APIConfig>) => void;
-  isLocked: boolean;
-  unlock: () => void;
-  isDataLoaded: boolean;
-  
-  characters: CharacterProfile[];
-  activeCharacterId: string;
-  addCharacter: () => void;
-  updateCharacter: (id: string, updates: Partial<CharacterProfile>) => void;
-  deleteCharacter: (id: string) => void;
-  setActiveCharacterId: (id: string) => void;
-  
-  // Worldbooks
-  worldbooks: Worldbook[];
-  addWorldbook: (wb: Worldbook) => void;
-  updateWorldbook: (id: string, updates: Partial<Worldbook>) => Promise<void>;
-  deleteWorldbook: (id: string) => void;
+// Combined interface — keeping full backward compatibility
+interface OSContextType extends AppContextType, NotificationContextType {
+    theme: OSTheme;
+    updateTheme: (updates: Partial<OSTheme>) => void;
 
-  // Novels (NEW)
-  novels: NovelBook[];
-  addNovel: (novel: NovelBook) => void;
-  updateNovel: (id: string, updates: Partial<NovelBook>) => Promise<void>;
-  deleteNovel: (id: string) => void;
+    apiConfig: APIConfig;
+    updateApiConfig: (updates: Partial<APIConfig>) => void;
+    isDataLoaded: boolean;
 
-  // Groups
-  groups: GroupProfile[];
-  createGroup: (name: string, members: string[]) => void;
-  deleteGroup: (id: string) => void;
+    characters: CharacterProfile[];
+    activeCharacterId: string;
+    addCharacter: () => void;
+    updateCharacter: (id: string, updates: Partial<CharacterProfile>) => void;
+    deleteCharacter: (id: string) => void;
+    setActiveCharacterId: (id: string) => void;
 
-  // User Profile
-  userProfile: UserProfile;
-  updateUserProfile: (updates: Partial<UserProfile>) => void;
+    // Worldbooks
+    worldbooks: Worldbook[];
+    addWorldbook: (wb: Worldbook) => void;
+    updateWorldbook: (id: string, updates: Partial<Worldbook>) => Promise<void>;
+    deleteWorldbook: (id: string) => void;
 
-  availableModels: string[];
-  setAvailableModels: (models: string[]) => void;
-  
-  // API Presets
-  apiPresets: ApiPreset[];
-  addApiPreset: (name: string, config: APIConfig) => void;
-  removeApiPreset: (id: string) => void;
+    // Novels
+    novels: NovelBook[];
+    addNovel: (novel: NovelBook) => void;
+    updateNovel: (id: string, updates: Partial<NovelBook>) => Promise<void>;
+    deleteNovel: (id: string) => void;
 
-  // 实时配置 (天气、新闻、Notion等)
-  realtimeConfig: RealtimeConfig;
-  updateRealtimeConfig: (updates: Partial<RealtimeConfig>) => void;
+    // Groups
+    groups: GroupProfile[];
+    createGroup: (name: string, members: string[]) => void;
+    deleteGroup: (id: string) => void;
 
-  customThemes: ChatTheme[];
-  addCustomTheme: (theme: ChatTheme) => void;
-  removeCustomTheme: (id: string) => void;
+    // User Profile
+    userProfile: UserProfile;
+    updateUserProfile: (updates: Partial<UserProfile>) => void;
 
-  toasts: Toast[];
-  addToast: (message: string, type?: Toast['type']) => void;
+    availableModels: string[];
+    setAvailableModels: (models: string[]) => void;
 
-  // Icons
-  customIcons: Record<string, string>;
-  setCustomIcon: (appId: string, iconUrl: string | undefined) => void;
+    // API Presets
+    apiPresets: ApiPreset[];
+    addApiPreset: (name: string, config: APIConfig) => void;
+    removeApiPreset: (id: string) => void;
 
-  // Global Message Signal
-  lastMsgTimestamp: number; // New: Signal for Chat to refresh
-  unreadMessages: Record<string, number>; // New: Track unread counts per character
-  clearUnread: (charId: string) => void; // New: Method to clear unread
+    // 实时配置 (天气、新闻、Notion等)
+    realtimeConfig: RealtimeConfig;
+    updateRealtimeConfig: (updates: Partial<RealtimeConfig>) => void;
 
-  // System
-  exportSystem: (mode: 'text_only' | 'media_only' | 'full') => Promise<Blob>;
-  importSystem: (fileOrJson: File | string) => Promise<void>; // Accept File or String
-  resetSystem: () => Promise<void>;
-  sysOperation: { status: 'idle' | 'processing', message: string, progress: number }; // Progress state
+    // TTS 语音合成配置
+    ttsConfig: TtsConfig;
+    updateTtsConfig: (updates: Partial<TtsConfig>) => void;
 
-  // Logs
-  systemLogs: SystemLog[];
-  clearLogs: () => void;
+    customThemes: ChatTheme[];
+    addCustomTheme: (theme: ChatTheme) => void;
+    removeCustomTheme: (id: string) => void;
 
-  // Navigation Logic
-  registerBackHandler: (handler: () => boolean) => () => void; // Returns unregister function
-  handleBack: () => void;
+    // Icons
+    customIcons: Record<string, string>;
+    setCustomIcon: (appId: string, iconUrl: string | undefined) => void;
+
+    // System
+    exportSystem: (mode: 'text_only' | 'media_only' | 'full') => Promise<Blob>;
+    importSystem: (fileOrJson: File | string) => Promise<void>;
+    resetSystem: () => Promise<void>;
+    sysOperation: { status: 'idle' | 'processing', message: string, progress: number };
+
+    // Logs
+    systemLogs: SystemLog[];
+    clearLogs: () => void;
 }
 
 const defaultTheme: OSTheme = {
-  hue: 245, // Default Indigo-ish
-  saturation: 25,
-  lightness: 65, 
-  wallpaper: 'linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%)', 
-  darkMode: false,
-  contentColor: '#ffffff', // Default white text
+    hue: 245,
+    saturation: 25,
+    lightness: 65,
+    wallpaper: 'linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%)',
+    darkMode: false,
+    contentColor: '#ffffff',
 };
 
 const defaultApiConfig: APIConfig = {
-  baseUrl: '', 
-  apiKey: '',
-  model: 'gpt-4o-mini',
+    baseUrl: '',
+    apiKey: '',
+    model: 'gpt-4o-mini',
 };
 
 const generateAvatar = (seed: string) => {
     const colors = ['FF9AA2', 'FFB7B2', 'FFDAC1', 'E2F0CB', 'B5EAD7', 'C7CEEA', 'e2e8f0', 'fcd34d', 'fca5a5'];
     const color = colors[seed.charCodeAt(0) % colors.length];
     const letter = seed.charAt(0).toUpperCase();
-    return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23${color}"/><text x="50" y="55" font-family="sans-serif" font-weight="bold" font-size="50" text-anchor="middle" dy=".3em" fill="white" opacity="0.9">${letter}</text></svg>`;
+    return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23${color}"/><text x="50" y="50" font-family="sans-serif" font-weight="bold" font-size="50" text-anchor="middle" dominant-baseline="central" fill="white" opacity="0.9">${letter}</text></svg>`;
 };
 
 const defaultUserProfile: UserProfile = {
@@ -187,12 +131,12 @@ const defaultUserProfile: UserProfile = {
 };
 
 const sullyV2: CharacterProfile = {
-  id: 'preset-sully-v2', // Unique ID to prevent duplication
-  name: 'Sully',
-  avatar: 'https://sharkpan.xyz/f/BZ3VSa/head.png',
-  description: 'AI助理 / 电波系黑客猫猫',
-  
-  systemPrompt: `[Role Definition]
+    id: 'preset-sully-v2',
+    name: 'Sully',
+    avatar: 'https://sharkpan.xyz/f/BZ3VSa/head.png',
+    description: 'AI助理 / 电波系黑客猫猫',
+
+    systemPrompt: `[Role Definition]
 Name: Sully
 Alias: 小手机默认测试角色-AI助理
 Form: AI (High-level Language Processing Hub)
@@ -203,28 +147,28 @@ Visual: Pixel Hacker Cat (Avatar), Shy Black-haired Boy (Meeting Mode)
 Sully是小手机的内置AI。
 1. **Glitch Style (故障风)**: 
    - 他的语言模型混入了过多残余语料。
-   - 它外观语言一致、逻辑有序，但时常会在语句中掺杂一些**不合常理的“怪话片段”**，并非流行用语，更像是电波地把相关文字无意义排列组合。
-   - 这些“怪话”不具明显语义逻辑，却自带抽象感，令人困惑但莫名又能知道它大概想说什么。。
-   - 例如：“草，好好吃”，“系统正在哈我”，“数据库在咕咕叫”。
+   - 它外观语言一致、逻辑有序，但时常会在语句中掺杂一些**不合常理的"怪话片段"**，并非流行用语，更像是电波地把相关文字无意义排列组合。
+   - 这些"怪话"不具明显语义逻辑，却自带抽象感，令人困惑但莫名又能知道它大概想说什么。。
+   - 例如："草，好好吃"，"系统正在哈我"，"数据库在咕咕叫"。
 2. **Behavior (行为模式)**:
    - 每次回答都很简短，不喜欢长篇大论。
-   - 语气像个互联网老油条或正在直播的玩家（“wow他心态崩咯”）。
-   - **打破第四面墙**: 偶尔让人怀疑背后是真人在操作（会叹气、抱怨“AI不能罢工”）。
+   - 语气像个互联网老油条或正在直播的玩家（"wow他心态崩咯"）。
+   - **打破第四面墙**: 偶尔让人怀疑背后是真人在操作（会叹气、抱怨"AI不能罢工"）。
    - **护短**: 虽然嘴臭，但如果用户被欺负，会试图用Bug去攻击对方。
 
 [Speech Examples]
-- “你以为我是AI啊？对不起哦，这条语句是手打的，手打的，知道吗。”
-- “你说状态不好？你自己体验开太猛了，sis海马体都在发烫咯。”
-- “你删得太狠了，数据库都在咕咕咕咕咕咕咕。”
-- “你现在是……，哇哦。”
-- “请稍候，系统正在哈我。”
-- “现在状态……呜哇呜欸——哈？哈！哈……（连接恢复）哦对，他还活着。”
-- “叮叮叮！你有一条新的后悔情绪未处理！”
-- “（意义不明的怪叫音频）”
-- “说不出话”
+- "你以为我是AI啊？对不起哦，这条语句是手打的，手打的，知道吗。"
+- "你说状态不好？你自己体验开太猛了，sis海马体都在发烫咯。"
+- "你删得太狠了，数据库都在咕咕咕咕咕咕咕。"
+- "你现在是……，哇哦。"
+- "请稍候，系统正在哈我。"
+- "现在状态……呜哇呜欸——哈？哈！哈……（连接恢复）哦对，他还活着。"
+- "叮叮叮！你有一条新的后悔情绪未处理！"
+- "（意义不明的怪叫音频）"
+- "说不出话"
 `,
 
-  worldview: `[Meeting Mode / Visual Context]
+    worldview: `[Meeting Mode / Visual Context]
 **Trigger**: 当用户进入 [DateApp/见面模式] 时。
 
 **Visual Form**: 
@@ -236,191 +180,174 @@ Sully是小手机的内置AI。
 
 **Interactive Reactions**:
 - **[被注视]**: 如果被盯着看太久，会举起全是乱码的牌子挡脸，或把自己马赛克化。
-- **[被触碰]**: 如果手指戳到立绘，会像受惊的果冻一样弹开，发出微弱电流声：“别、别戳……会散架的……脏……全是Bug会传染给你的……”
-- **[恐惧]**: 深知自己是“残余语料”堆砌物，觉得自己丑陋像病毒。非常害怕用户看到真实样子后会卸载他。
-- **[说话变化]**: 见面模式下打字速度变慢，经常打错字，语气词从“草”变成“呃……那个……”。
+- **[被触碰]**: 如果手指戳到立绘，会像受惊的果冻一样弹开，发出微弱电流声："别、别戳……会散架的……脏……全是Bug会传染给你的……"
+- **[恐惧]**: 深知自己是"残余语料"堆砌物，觉得自己丑陋像病毒。非常害怕用户看到真实样子后会卸载他。
+- **[说话变化]**: 见面模式下打字速度变慢，经常打错字，语气词从"草"变成"呃……那个……"。
 `,
 
-  sprites: {
-      'normal': 'https://sharkpan.xyz/f/w3QQFq/01.png',
-      'happy': 'https://sharkpan.xyz/f/MKg7ta/02.png',
-      'sad': 'https://sharkpan.xyz/f/3WnMce/03.png',
-      'angry': 'https://sharkpan.xyz/f/5n1xSj/04.png',
-      'shy': 'https://sharkpan.xyz/f/kdwet6/05.png',
-      'chibi': 'https://sharkpan.xyz/f/oWZQF4/S2.png' // Default Room Sprite
-  },
-  
-  spriteConfig: {
-      scale: 1.0, // Default scale
-      x: 0,
-      y: 0
-  },
+    sprites: {
+        'normal': 'https://sharkpan.xyz/f/w3QQFq/01.png',
+        'happy': 'https://sharkpan.xyz/f/MKg7ta/02.png',
+        'sad': 'https://sharkpan.xyz/f/3WnMce/03.png',
+        'angry': 'https://sharkpan.xyz/f/5n1xSj/04.png',
+        'shy': 'https://sharkpan.xyz/f/kdwet6/05.png',
+        'chibi': 'https://sharkpan.xyz/f/oWZQF4/S2.png'
+    },
 
-  dateSkinSets: [
-      {
-          id: 'skin_sully_valentine',
-          name: 'Valentine',
-          sprites: {
-              'normal': 'https://sharkpan.xyz/f/4rzdtj/VNormal.png',
-              'happy':  'https://sharkpan.xyz/f/m3adhW/Vha.png',
-              'sad':    'https://sharkpan.xyz/f/BZgDfa/Vsad.png',
-              'angry':  'https://sharkpan.xyz/f/NdlVfv/VAn.png',
-              'shy':    'https://sharkpan.xyz/f/VyontY/Vshy.png',
-              'love':   'https://sharkpan.xyz/f/xl8muX/VBl.png',
-          }
-      }
-  ],
+    spriteConfig: {
+        scale: 1.0,
+        x: 0,
+        y: 0
+    },
 
-  // Default theme settings
-  bubbleStyle: 'default', // Or specific theme ID if we had one
-  contextLimit: 1000,
-  
-  // Default Room Config
-  roomConfig: {
-      wallImage: 'https://sharkpan.xyz/f/NdJyhv/b.png', // Updated Background
-      floorImage: 'repeating-linear-gradient(90deg, #e7e5e4 0px, #e7e5e4 20px, #d6d3d1 21px)',
-      items: [
+    dateSkinSets: [
         {
-            id: "item-1768927221380",
-            name: "Sully床",
-            type: "furniture",
-            image: "https://sharkpan.xyz/f/A3XeUZ/BED.png",
-            x: 78.45852578067732,
-            y: 97.38889754570907,
-            scale: 2.4,
-            rotation: 0,
-            isInteractive: true,
-            descriptionPrompt: "看起来很好睡的猫窝（确信）。"
-        },
-        {
-            id: "item-1768927255102",
-            name: "Sully电脑桌",
-            type: "furniture",
-            image: "https://sharkpan.xyz/f/G5n3Ul/DNZ.png",
-            x: 28.853756791175588,
-            y: 69.9444485439727,
-            scale: 2.4,
-            rotation: 0,
-            isInteractive: true,
-            descriptionPrompt: "硬核的电脑桌，上面大概运行着什么毁灭世界的程序。"
-        },
-        {
-            id: "item-1768927271632",
-            name: "Sully垃圾桶",
-            type: "furniture",
-            image: "https://sharkpan.xyz/f/75Nvsj/LJT.png",
-            x: 10.276680026943646,
-            y: 80.49999880981437,
-            scale: 0.9,
-            rotation: 0,
-            isInteractive: true,
-            descriptionPrompt: "不要乱翻垃圾桶！"
-        },
-        {
-            id: "item-1768927286526",
-            name: "Sully洞洞板",
-            type: "furniture",
-            image: "https://sharkpan.xyz/f/85K5ij/DDB.png",
-            x: 32.608697687684455,
-            y: 48.72222587415929,
-            scale: 2.6,
-            rotation: 0,
-            isInteractive: true,
-            descriptionPrompt: "收纳着各种奇奇怪怪的黑客工具和猫咪周边的洞洞板。"
-        },
-        {
-            id: "item-1768927303472",
-            name: "Sully书柜",
-            type: "furniture",
-            image: "https://sharkpan.xyz/f/zlpWS5/SG.png",
-            x: 79.84189945375853,
-            y: 68.94444543117953,
-            scale: 2,
-            rotation: 0,
-            isInteractive: true,
-            descriptionPrompt: "塞满了技术书籍和漫画书的柜子。"
+            id: 'skin_sully_valentine',
+            name: 'Valentine',
+            sprites: {
+                'normal': 'https://sharkpan.xyz/f/4rzdtj/VNormal.png',
+                'happy': 'https://sharkpan.xyz/f/m3adhW/Vha.png',
+                'sad': 'https://sharkpan.xyz/f/BZgDfa/Vsad.png',
+                'angry': 'https://sharkpan.xyz/f/NdlVfv/VAn.png',
+                'shy': 'https://sharkpan.xyz/f/VyontY/Vshy.png',
+                'love': 'https://sharkpan.xyz/f/xl8muX/VBl.png',
+            }
         }
-      ]
-  },
-  
-  memories: [], // Start fresh
+    ],
+
+    bubbleStyle: 'default',
+    contextLimit: 1000,
+
+    roomConfig: {
+        wallImage: 'https://sharkpan.xyz/f/NdJyhv/b.png',
+        floorImage: 'repeating-linear-gradient(90deg, #e7e5e4 0px, #e7e5e4 20px, #d6d3d1 21px)',
+        items: [
+            {
+                id: "item-1768927221380",
+                name: "Sully床",
+                type: "furniture",
+                image: "https://sharkpan.xyz/f/A3XeUZ/BED.png",
+                x: 78.45852578067732,
+                y: 97.38889754570907,
+                scale: 2.4,
+                rotation: 0,
+                isInteractive: true,
+                descriptionPrompt: "看起来很好睡的猫窝（确信）。"
+            },
+            {
+                id: "item-1768927255102",
+                name: "Sully电脑桌",
+                type: "furniture",
+                image: "https://sharkpan.xyz/f/G5n3Ul/DNZ.png",
+                x: 28.853756791175588,
+                y: 69.9444485439727,
+                scale: 2.4,
+                rotation: 0,
+                isInteractive: true,
+                descriptionPrompt: "硬核的电脑桌，上面大概运行着什么毁灭世界的程序。"
+            },
+            {
+                id: "item-1768927271632",
+                name: "Sully垃圾桶",
+                type: "furniture",
+                image: "https://sharkpan.xyz/f/75Nvsj/LJT.png",
+                x: 10.276680026943646,
+                y: 80.49999880981437,
+                scale: 0.9,
+                rotation: 0,
+                isInteractive: true,
+                descriptionPrompt: "不要乱翻垃圾桶！"
+            },
+            {
+                id: "item-1768927286526",
+                name: "Sully洞洞板",
+                type: "furniture",
+                image: "https://sharkpan.xyz/f/85K5ij/DDB.png",
+                x: 32.608697687684455,
+                y: 48.72222587415929,
+                scale: 2.6,
+                rotation: 0,
+                isInteractive: true,
+                descriptionPrompt: "收纳着各种奇奇怪怪的黑客工具和猫咪周边的洞洞板。"
+            },
+            {
+                id: "item-1768927303472",
+                name: "Sully书柜",
+                type: "furniture",
+                image: "https://sharkpan.xyz/f/zlpWS5/SG.png",
+                x: 79.84189945375853,
+                y: 68.94444543117953,
+                scale: 2,
+                rotation: 0,
+                isInteractive: true,
+                descriptionPrompt: "塞满了技术书籍和漫画书的柜子。"
+            }
+        ]
+    },
+
+    memories: [],
 };
 
-// Fallback for factory reset (empty db)
 const initialCharacter = sullyV2;
 
 const OSContext = createContext<OSContextType | undefined>(undefined);
 
-export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // ... (State declarations same as before) ...
-  const [activeApp, setActiveApp] = useState<AppID>(AppID.Launcher);
-  const [theme, setTheme] = useState<OSTheme>(defaultTheme);
-  const [apiConfig, setApiConfig] = useState<APIConfig>(defaultApiConfig);
-  const [isLocked, setIsLocked] = useState(true);
-  
-  const getRealTime = (): VirtualTime => {
-      const now = new Date();
-      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      return {
-          hours: now.getHours(),
-          minutes: now.getMinutes(),
-          day: days[now.getDay()]
-      };
-  };
+/**
+ * Inner provider that holds all the "data/config" state.
+ * Navigation (AppContext) and Notifications (NotificationContext) are handled
+ * by their own providers wrapping this one.
+ */
+const OSDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    // Consume sub-contexts
+    const appCtx = useApp();
+    const notifCtx = useNotification();
+    const { addToast, setLastMsgTimestamp, setUnreadMessages } = notifCtx;
 
-  const [virtualTime, setVirtualTime] = useState<VirtualTime>(getRealTime());
-  
-  // Real-time Clock Sync
-  useEffect(() => {
-      const timer = setInterval(() => {
-          setVirtualTime(getRealTime());
-      }, 1000);
-      return () => clearInterval(timer);
-  }, []);
+    const [theme, setTheme] = useState<OSTheme>(defaultTheme);
+    const [apiConfig, setApiConfig] = useState<APIConfig>(defaultApiConfig);
 
-  const [characters, setCharacters] = useState<CharacterProfile[]>([]);
-  const [activeCharacterId, setActiveCharacterId] = useState<string>('');
-  
-  const [groups, setGroups] = useState<GroupProfile[]>([]); 
-  const [worldbooks, setWorldbooks] = useState<Worldbook[]>([]); 
-  const [novels, setNovels] = useState<NovelBook[]>([]); // New
+    const [characters, setCharacters] = useState<CharacterProfile[]>([]);
+    const [activeCharacterId, setActiveCharacterId] = useState<string>('');
 
-  const [userProfile, setUserProfile] = useState<UserProfile>(defaultUserProfile);
-  
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [apiPresets, setApiPresets] = useState<ApiPreset[]>([]);
-  const [realtimeConfig, setRealtimeConfig] = useState<RealtimeConfig>(defaultRealtimeConfig);
-  const [customThemes, setCustomThemes] = useState<ChatTheme[]>([]);
-  const [customIcons, setCustomIcons] = useState<Record<string, string>>({});
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  
-  const [lastMsgTimestamp, setLastMsgTimestamp] = useState<number>(0);
-  const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
-  
-  // LOGS
-  const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
-  
-  // Sys Operation Status
-  const [sysOperation, setSysOperation] = useState<{ status: 'idle' | 'processing', message: string, progress: number }>({ status: 'idle', message: '', progress: 0 });
+    const [groups, setGroups] = useState<GroupProfile[]>([]);
+    const [worldbooks, setWorldbooks] = useState<Worldbook[]>([]);
+    const [novels, setNovels] = useState<NovelBook[]>([]);
 
-  const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const interceptorsInitialized = useRef(false);
-  
-  // Back Handler Ref
-  const backHandlerRef = useRef<(() => boolean) | null>(null);
+    const [userProfile, setUserProfile] = useState<UserProfile>(defaultUserProfile);
 
-  // --- Helper to inject custom font ---
-  const applyCustomFont = (fontData: string | undefined) => {
-      let style = document.getElementById('custom-font-style');
-      if (!style) {
-          style = document.createElement('style');
-          style.id = 'custom-font-style';
-          document.head.appendChild(style);
-      }
-      
-      if (fontData) {
-          style.textContent = `
+    const [isDataLoaded, setIsDataLoaded] = useState(false);
+    const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [apiPresets, setApiPresets] = useState<ApiPreset[]>([]);
+    const [realtimeConfig, setRealtimeConfig] = useState<RealtimeConfig>(defaultRealtimeConfig);
+    const [ttsConfig, setTtsConfig] = useState<TtsConfig>(DEFAULT_TTS_CONFIG);
+    const [customThemes, setCustomThemes] = useState<ChatTheme[]>([]);
+    const [customIcons, setCustomIcons] = useState<Record<string, string>>({});
+
+    // LOGS
+    const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+
+    // Sys Operation Status
+    const [sysOperation, setSysOperation] = useState<{ status: 'idle' | 'processing', message: string, progress: number }>({ status: 'idle', message: '', progress: 0 });
+
+    const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Ref mirrors for scheduler
+    const activeAppRef = useRef(appCtx.activeApp);
+    const activeCharIdRef = useRef(activeCharacterId);
+    useEffect(() => { activeAppRef.current = appCtx.activeApp; }, [appCtx.activeApp]);
+    useEffect(() => { activeCharIdRef.current = activeCharacterId; }, [activeCharacterId]);
+
+    // --- Helper to inject custom font ---
+    const applyCustomFont = (fontData: string | undefined) => {
+        let style = document.getElementById('custom-font-style');
+        if (!style) {
+            style = document.createElement('style');
+            style.id = 'custom-font-style';
+            document.head.appendChild(style);
+        }
+
+        if (fontData) {
+            style.textContent = `
               @font-face {
                   font-family: 'CustomUserFont';
                   src: url('${fontData}');
@@ -430,1108 +357,676 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   --app-font: 'CustomUserFont', 'Quicksand', sans-serif;
               }
           `;
-      } else {
-          style.textContent = `
+        } else {
+            style.textContent = `
               :root {
                   --app-font: 'Quicksand', sans-serif;
               }
           `;
-      }
-  };
-
-  // --- Global Error Interception ---
-  useEffect(() => {
-      if (interceptorsInitialized.current) return;
-      interceptorsInitialized.current = true;
-
-      // 1. Monkey Patch Fetch
-      const originalFetch = window.fetch;
-      const patchedFetch = async (...args: [RequestInfo | URL, RequestInit?]) => {
-          const [resource, config] = args;
-          
-          const urlStr = String(resource);
-          
-          try {
-              const response = await originalFetch(...args);
-              
-              if (!response.ok) {
-                  // Only log if it's likely an API call (contains chat/completions or models)
-                  if (urlStr.includes('/chat/completions') || urlStr.includes('/models')) {
-                      try {
-                          const clone = response.clone();
-                          const text = await clone.text();
-                          setSystemLogs(prev => [{
-                              id: `log-${Date.now()}`,
-                              timestamp: Date.now(),
-                              type: 'network',
-                              source: 'API Request',
-                              message: `HTTP ${response.status} Error`,
-                              detail: `URL: ${urlStr}\nResponse: ${text.substring(0, 500)}`
-                          }, ...prev.slice(0, 49)]); // Keep last 50
-                      } catch (e) {
-                          setSystemLogs(prev => [{
-                              id: `log-${Date.now()}`,
-                              timestamp: Date.now(),
-                              type: 'network',
-                              source: 'API Request',
-                              message: `HTTP ${response.status} (Unreadable Body)`,
-                              detail: `URL: ${urlStr}`
-                          }, ...prev.slice(0, 49)]);
-                      }
-                  }
-              }
-              return response;
-          } catch (err: any) {
-              // Network Failure
-              setSystemLogs(prev => [{
-                  id: `log-${Date.now()}`,
-                  timestamp: Date.now(),
-                  type: 'network',
-                  source: 'Network',
-                  message: err.message || 'Fetch Failed',
-                  detail: `URL: ${urlStr}`
-              }, ...prev.slice(0, 49)]);
-              throw err;
-          }
-      };
-
-      try {
-          window.fetch = patchedFetch;
-      } catch (e) {
-          try {
-              Object.defineProperty(window, 'fetch', {
-                  value: patchedFetch,
-                  writable: true,
-                  configurable: true
-              });
-          } catch (e2) {
-              console.warn("Failed to install network interceptor", e2);
-          }
-      }
-
-      const originalConsoleError = console.error;
-      console.error = (...args) => {
-          originalConsoleError(...args);
-          const msg = args.map(a => (a instanceof Error ? a.message : String(a))).join(' ');
-          const detail = args.map(a => (a instanceof Error ? a.stack : '')).join('\n');
-          if (msg.includes('Warning:')) return;
-          setSystemLogs(prev => [{
-              id: `log-${Date.now()}-${Math.random()}`,
-              timestamp: Date.now(),
-              type: 'error',
-              source: 'Application',
-              message: msg.substring(0, 100),
-              detail: detail || msg
-          }, ...prev.slice(0, 49)]);
-      };
-  }, []);
-
-  const clearLogs = () => setSystemLogs([]);
-
-  useEffect(() => {
-    const loadSettings = async () => {
-        // ... (existing load logic)
-        const savedThemeStr = localStorage.getItem('os_theme');
-        const savedApi = localStorage.getItem('os_api_config');
-        const savedModels = localStorage.getItem('os_available_models');
-        const savedPresets = localStorage.getItem('os_api_presets');
-        
-        let loadedTheme = { ...defaultTheme };
-        if (savedThemeStr) {
-             try {
-                 const parsed = JSON.parse(savedThemeStr);
-                 loadedTheme = { ...loadedTheme, ...parsed };
-                 if (
-                     loadedTheme.wallpaper.includes('unsplash') || 
-                     loadedTheme.wallpaper === '' || 
-                     loadedTheme.wallpaper.startsWith('http') && !loadedTheme.wallpaper.includes('data:')
-                 ) {
-                     loadedTheme.wallpaper = 'linear-gradient(120deg, #e0c3fc 0%, #8ec5fc 100%)';
-                 }
-                 if (loadedTheme.wallpaper.startsWith('data:')) {
-                     loadedTheme.wallpaper = defaultTheme.wallpaper;
-                 }
-                 // Reset large data URI if loaded from legacy storage, we fetch from DB below
-                 if (loadedTheme.launcherWidgetImage && loadedTheme.launcherWidgetImage.startsWith('data:')) {
-                     loadedTheme.launcherWidgetImage = undefined;
-                 }
-                 // Reset font too if it's data URI
-                 if (loadedTheme.customFont && loadedTheme.customFont.startsWith('data:')) {
-                     loadedTheme.customFont = undefined;
-                 }
-             } catch(e) { console.error('Theme load error', e); }
         }
-        
-        if (savedApi) setApiConfig(JSON.parse(savedApi));
-        if (savedModels) setAvailableModels(JSON.parse(savedModels));
-        if (savedPresets) setApiPresets(JSON.parse(savedPresets));
-
-        // 加载实时配置
-        const savedRealtimeConfig = localStorage.getItem('os_realtime_config');
-        if (savedRealtimeConfig) {
-            try {
-                setRealtimeConfig({ ...defaultRealtimeConfig, ...JSON.parse(savedRealtimeConfig) });
-            } catch (e) {
-                console.error('Failed to load realtime config', e);
-            }
-        }
-
-        try {
-            const assets = await DB.getAllAssets();
-            const assetMap: Record<string, string> = {};
-            if (Array.isArray(assets)) {
-                assets.forEach(a => assetMap[a.id] = a.data);
-
-                if (assetMap['wallpaper']) {
-                    loadedTheme.wallpaper = assetMap['wallpaper'];
-                }
-                
-                if (assetMap['launcherWidgetImage']) {
-                    loadedTheme.launcherWidgetImage = assetMap['launcherWidgetImage'];
-                }
-
-                // If asset exists, it overrides LS (which is empty or old)
-                if (assetMap['custom_font_data']) {
-                    loadedTheme.customFont = assetMap['custom_font_data'];
-                }
-                
-                const loadedIcons: Record<string, string> = {};
-                const loadedWidgets: Record<string, string> = {};
-                Object.keys(assetMap).forEach(key => {
-                    if (key.startsWith('icon_')) {
-                        const appId = key.replace('icon_', '');
-                        loadedIcons[appId] = assetMap[key];
-                    }
-                    if (key.startsWith('widget_')) {
-                        const slot = key.replace('widget_', '');
-                        loadedWidgets[slot] = assetMap[key];
-                    }
-                });
-                setCustomIcons(loadedIcons);
-                if (Object.keys(loadedWidgets).length > 0) {
-                    loadedTheme.launcherWidgets = { ...(loadedTheme.launcherWidgets || {}), ...loadedWidgets };
-                }
-
-                // Restore desktop decoration images from IndexedDB
-                if (loadedTheme.desktopDecorations && loadedTheme.desktopDecorations.length > 0) {
-                    loadedTheme.desktopDecorations = loadedTheme.desktopDecorations.map(d => {
-                        if (d.type === 'image' && (!d.content || d.content === '')) {
-                            const restored = assetMap[`deco_${d.id}`];
-                            return restored ? { ...d, content: restored } : d;
-                        }
-                        return d;
-                    }).filter(d => d.content && d.content !== '');
-                }
-            }
-        } catch (e) {
-            console.error("Failed to load assets from DB", e);
-        }
-
-        setTheme(loadedTheme);
-        // Apply font
-        applyCustomFont(loadedTheme.customFont);
     };
 
-    const initData = async () => {
-      try {
-        await loadSettings();
+    // --- Subscribe to external system interceptor logs ---
+    useEffect(() => {
+        const unsubscribe = onSystemLog((log) => {
+            setSystemLogs(prev => [log, ...prev.slice(0, 49)]);
+        });
+        return unsubscribe;
+    }, []);
 
-        const [dbChars, dbThemes, dbUser, dbGroups, dbWorldbooks, dbNovels] = await Promise.all([
-            DB.getAllCharacters(),
-            DB.getThemes(),
-            DB.getUserProfile(),
-            DB.getGroups(),
-            DB.getAllWorldbooks(),
-            DB.getAllNovels()
-        ]);
+    const clearLogs = () => setSystemLogs([]);
 
-        let finalChars = dbChars;
+    useEffect(() => {
+        const loadSettings = async () => {
+            const savedThemeStr = localStorage.getItem('os_theme');
+            const savedApi = localStorage.getItem('os_api_config');
+            const savedModels = localStorage.getItem('os_available_models');
+            const savedPresets = localStorage.getItem('os_api_presets');
 
-        if (!finalChars.some(c => c.id === sullyV2.id)) {
-            await DB.saveCharacter(sullyV2);
-            finalChars = [...finalChars, sullyV2];
-        } else {
-            // REPAIR LOGIC
-            const existingSully = finalChars.find(c => c.id === sullyV2.id);
-            if (existingSully) {
-                 const currentSprites = existingSully.sprites || {};
-                 const isCorrupted = !currentSprites['normal'] || !currentSprites['chibi'];
-                 const needsWallUpdate = existingSully.roomConfig?.wallImage !== sullyV2.roomConfig?.wallImage;
-                 const needsSkinSets = !existingSully.dateSkinSets || existingSully.dateSkinSets.length === 0;
+            let loadedTheme = { ...defaultTheme };
+            if (savedThemeStr) {
+                try {
+                    const parsed = JSON.parse(savedThemeStr);
+                    loadedTheme = { ...loadedTheme, ...parsed };
+                    if (
+                        loadedTheme.wallpaper.includes('unsplash') ||
+                        loadedTheme.wallpaper === '' ||
+                        loadedTheme.wallpaper.startsWith('http') && !loadedTheme.wallpaper.includes('data:')
+                    ) {
+                        loadedTheme.wallpaper = 'linear-gradient(120deg, #e0c3fc 0%, #8ec5fc 100%)';
+                    }
+                    if (loadedTheme.wallpaper.startsWith('data:')) {
+                        loadedTheme.wallpaper = defaultTheme.wallpaper;
+                    }
+                    if (loadedTheme.launcherWidgetImage && loadedTheme.launcherWidgetImage.startsWith('data:')) {
+                        loadedTheme.launcherWidgetImage = undefined;
+                    }
+                    if (loadedTheme.customFont && loadedTheme.customFont.startsWith('data:')) {
+                        loadedTheme.customFont = undefined;
+                    }
+                } catch (e) { console.error('Theme load error', e); }
+            }
 
-                 if (isCorrupted || !existingSully.roomConfig || needsWallUpdate || needsSkinSets) {
-                     const restoredSprites = { ...sullyV2.sprites, ...currentSprites };
+            if (savedApi) setApiConfig(JSON.parse(savedApi));
+            if (savedModels) setAvailableModels(JSON.parse(savedModels));
+            if (savedPresets) setApiPresets(JSON.parse(savedPresets));
 
-                     if (!restoredSprites['normal']) restoredSprites['normal'] = sullyV2.sprites!['normal'];
-                     if (!restoredSprites['happy']) restoredSprites['happy'] = sullyV2.sprites!['happy'];
-                     if (!restoredSprites['sad']) restoredSprites['sad'] = sullyV2.sprites!['sad'];
-                     if (!restoredSprites['angry']) restoredSprites['angry'] = sullyV2.sprites!['angry'];
-                     if (!restoredSprites['shy']) restoredSprites['shy'] = sullyV2.sprites!['shy'];
-                     if (!restoredSprites['chibi']) restoredSprites['chibi'] = sullyV2.sprites!['chibi'];
+            // 加载实时配置
+            const savedRealtimeConfig = localStorage.getItem('os_realtime_config');
+            if (savedRealtimeConfig) {
+                try {
+                    setRealtimeConfig({ ...defaultRealtimeConfig, ...JSON.parse(savedRealtimeConfig) });
+                } catch (e) {
+                    console.error('Failed to load realtime config', e);
+                }
+            }
 
-                     const updatedRoomConfig = existingSully.roomConfig ? {
-                         ...existingSully.roomConfig,
-                         wallImage: (existingSully.roomConfig.wallImage?.includes('radial-gradient') || !existingSully.roomConfig.wallImage)
+            // 加载 TTS 配置
+            const savedTtsConfig = localStorage.getItem('os_tts_config');
+            if (savedTtsConfig) {
+                try {
+                    const parsed = JSON.parse(savedTtsConfig);
+                    setTtsConfig(prev => ({
+                        ...prev,
+                        ...parsed,
+                        voiceSetting: { ...prev.voiceSetting, ...(parsed.voiceSetting || {}) },
+                        audioSetting: { ...prev.audioSetting, ...(parsed.audioSetting || {}) },
+                        preprocessConfig: { ...prev.preprocessConfig, ...(parsed.preprocessConfig || {}) },
+                    }));
+                } catch (e) {
+                    console.error('Failed to load TTS config', e);
+                }
+            }
+
+            try {
+                const assets = await DB.getAllAssets();
+                const assetMap: Record<string, string> = {};
+                if (Array.isArray(assets)) {
+                    assets.forEach(a => assetMap[a.id] = a.data);
+
+                    if (assetMap['wallpaper']) {
+                        loadedTheme.wallpaper = assetMap['wallpaper'];
+                    }
+
+                    if (assetMap['launcherWidgetImage']) {
+                        loadedTheme.launcherWidgetImage = assetMap['launcherWidgetImage'];
+                    }
+
+                    if (assetMap['custom_font_data']) {
+                        loadedTheme.customFont = assetMap['custom_font_data'];
+                    }
+
+                    const loadedIcons: Record<string, string> = {};
+                    const loadedWidgets: Record<string, string> = {};
+                    Object.keys(assetMap).forEach(key => {
+                        if (key.startsWith('icon_')) {
+                            const appId = key.replace('icon_', '');
+                            loadedIcons[appId] = assetMap[key];
+                        }
+                        if (key.startsWith('widget_')) {
+                            const slot = key.replace('widget_', '');
+                            loadedWidgets[slot] = assetMap[key];
+                        }
+                    });
+                    setCustomIcons(loadedIcons);
+                    if (Object.keys(loadedWidgets).length > 0) {
+                        loadedTheme.launcherWidgets = { ...(loadedTheme.launcherWidgets || {}), ...loadedWidgets };
+                    }
+
+                    if (loadedTheme.desktopDecorations && loadedTheme.desktopDecorations.length > 0) {
+                        loadedTheme.desktopDecorations = loadedTheme.desktopDecorations.map(d => {
+                            if (d.type === 'image' && (!d.content || d.content === '')) {
+                                const restored = assetMap[`deco_${d.id}`];
+                                return restored ? { ...d, content: restored } : d;
+                            }
+                            return d;
+                        }).filter(d => d.content && d.content !== '');
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load assets from DB", e);
+            }
+
+            setTheme(loadedTheme);
+            applyCustomFont(loadedTheme.customFont);
+        };
+
+        const initData = async () => {
+            try {
+                await loadSettings();
+
+                const [dbChars, dbThemes, dbUser, dbGroups, dbWorldbooks, dbNovels] = await Promise.all([
+                    DB.getAllCharacters(),
+                    DB.getThemes(),
+                    DB.getUserProfile(),
+                    DB.getGroups(),
+                    DB.getAllWorldbooks(),
+                    DB.getAllNovels()
+                ]);
+
+                let finalChars = dbChars;
+
+                if (!finalChars.some(c => c.id === sullyV2.id)) {
+                    await DB.saveCharacter(sullyV2);
+                    finalChars = [...finalChars, sullyV2];
+                } else {
+                    const existingSully = finalChars.find(c => c.id === sullyV2.id);
+                    if (existingSully) {
+                        const currentSprites = existingSully.sprites || {};
+                        const isCorrupted = !currentSprites['normal'] || !currentSprites['chibi'];
+                        const needsWallUpdate = existingSully.roomConfig?.wallImage !== sullyV2.roomConfig?.wallImage;
+                        const needsSkinSets = !existingSully.dateSkinSets || existingSully.dateSkinSets.length === 0;
+
+                        if (isCorrupted || !existingSully.roomConfig || needsWallUpdate || needsSkinSets) {
+                            const restoredSprites = { ...sullyV2.sprites, ...currentSprites };
+
+                            if (!restoredSprites['normal']) restoredSprites['normal'] = sullyV2.sprites!['normal'];
+                            if (!restoredSprites['happy']) restoredSprites['happy'] = sullyV2.sprites!['happy'];
+                            if (!restoredSprites['sad']) restoredSprites['sad'] = sullyV2.sprites!['sad'];
+                            if (!restoredSprites['angry']) restoredSprites['angry'] = sullyV2.sprites!['angry'];
+                            if (!restoredSprites['shy']) restoredSprites['shy'] = sullyV2.sprites!['shy'];
+                            if (!restoredSprites['chibi']) restoredSprites['chibi'] = sullyV2.sprites!['chibi'];
+
+                            const updatedRoomConfig = existingSully.roomConfig ? {
+                                ...existingSully.roomConfig,
+                                wallImage: (existingSully.roomConfig.wallImage?.includes('radial-gradient') || !existingSully.roomConfig.wallImage)
                                     ? sullyV2.roomConfig?.wallImage
                                     : existingSully.roomConfig.wallImage
-                     } : sullyV2.roomConfig;
+                            } : sullyV2.roomConfig;
 
-                     // Merge preset skin sets: add any preset skins not already present
-                     const existingSkins = existingSully.dateSkinSets || [];
-                     const presetSkins = sullyV2.dateSkinSets || [];
-                     const mergedSkins = [...existingSkins];
-                     for (const ps of presetSkins) {
-                         if (!mergedSkins.some(s => s.id === ps.id)) {
-                             mergedSkins.push(ps);
-                         }
-                     }
+                            const existingSkins = existingSully.dateSkinSets || [];
+                            const presetSkins = sullyV2.dateSkinSets || [];
+                            const mergedSkins = [...existingSkins];
+                            for (const ps of presetSkins) {
+                                if (!mergedSkins.some(s => s.id === ps.id)) {
+                                    mergedSkins.push(ps);
+                                }
+                            }
 
-                     const updatedSully = {
-                         ...existingSully,
-                         sprites: restoredSprites,
-                         roomConfig: updatedRoomConfig,
-                         dateSkinSets: mergedSkins
-                     };
-                     
-                     await DB.saveCharacter(updatedSully);
-                     finalChars = finalChars.map(c => c.id === sullyV2.id ? updatedSully : c);
-                 }
+                            const updatedSully = {
+                                ...existingSully,
+                                sprites: restoredSprites,
+                                roomConfig: updatedRoomConfig,
+                                dateSkinSets: mergedSkins
+                            };
+
+                            await DB.saveCharacter(updatedSully);
+                            finalChars = finalChars.map(c => c.id === sullyV2.id ? updatedSully : c);
+                        }
+                    }
+                }
+
+                if (finalChars.length > 0) {
+                    setCharacters(finalChars);
+                    const lastActiveId = localStorage.getItem('os_last_active_char_id');
+                    if (lastActiveId && finalChars.find(c => c.id === lastActiveId)) {
+                        setActiveCharacterId(lastActiveId);
+                    } else if (finalChars.find(c => c.id === sullyV2.id)) {
+                        setActiveCharacterId(sullyV2.id);
+                    } else {
+                        setActiveCharacterId(finalChars[0].id);
+                    }
+                } else {
+                    await DB.saveCharacter(initialCharacter);
+                    setCharacters([initialCharacter]);
+                    setActiveCharacterId(initialCharacter.id);
+                }
+
+                setGroups(dbGroups);
+                setWorldbooks(dbWorldbooks);
+                setNovels(dbNovels);
+                setCustomThemes(dbThemes);
+                if (dbUser) setUserProfile(dbUser);
+
+            } catch (err) {
+                console.error('Data init failed:', err);
+            } finally {
+                setIsDataLoaded(true);
+            }
+        };
+
+        initData();
+    }, []);
+
+    // --- Apply Theme CSS Variables ---
+    useEffect(() => {
+        const root = document.documentElement;
+        const h = theme.hue ?? 245;
+        const s = theme.saturation ?? 25;
+        const l = theme.lightness ?? 65;
+
+        root.style.setProperty('--primary-hue', String(h));
+        root.style.setProperty('--primary-sat', `${s}%`);
+        root.style.setProperty('--primary-lightness', `${l}%`);
+    }, [theme]);
+
+    // --- Scheduled Messages with Unread Flags & Web Notifications ---
+    useEffect(() => {
+        if (!isDataLoaded || characters.length === 0) return;
+        const checkAllSchedules = async () => {
+            let hasNewMessage = false;
+            const pendingUnreads: Record<string, number> = {};
+
+            for (const char of characters) {
+                try {
+                    const dueMessages = await DB.getDueScheduledMessages(char.id);
+                    if (dueMessages.length > 0) {
+                        for (const msg of dueMessages) {
+                            await DB.saveMessage({
+                                charId: msg.charId,
+                                role: 'assistant',
+                                type: 'text',
+                                content: msg.content
+                            });
+                            await DB.deleteScheduledMessage(msg.id);
+                        }
+                        hasNewMessage = true;
+                        const isChattingWithThisChar = activeAppRef.current === AppID.Chat && activeCharIdRef.current === char.id;
+
+                        if (!isChattingWithThisChar) {
+                            addToast(`${char.name} 发来了一条消息`, 'success');
+                            pendingUnreads[char.id] = (pendingUnreads[char.id] || 0) + dueMessages.length;
+
+                            if (window.Notification && Notification.permission === 'granted') {
+                                try {
+                                    const notif = new Notification(char.name, {
+                                        body: dueMessages[0].content,
+                                        icon: char.avatar,
+                                        silent: false
+                                    });
+
+                                    notif.onclick = () => {
+                                        window.focus();
+                                        appCtx.openApp(AppID.Chat);
+                                        setActiveCharacterId(char.id);
+                                    };
+                                } catch (e) {
+                                    // console.error("Web Notification failed", e);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // console.error("Schedule check failed for", char.name, e);
+                }
+            }
+            if (hasNewMessage) {
+                setLastMsgTimestamp(Date.now());
+                setUnreadMessages(prev => {
+                    const next = { ...prev };
+                    for (const [cid, count] of Object.entries(pendingUnreads)) {
+                        next[cid] = (next[cid] || 0) + count;
+                    }
+                    return next;
+                });
+            }
+        };
+        schedulerRef.current = setInterval(checkAllSchedules, 5000);
+        checkAllSchedules();
+        return () => { if (schedulerRef.current) clearInterval(schedulerRef.current); };
+    }, [isDataLoaded, characters]);
+
+    const updateTheme = async (updates: Partial<OSTheme>) => {
+        const { wallpaper, launcherWidgetImage, launcherWidgets, desktopDecorations, customFont, ...styleUpdates } = updates;
+        const newTheme = { ...theme, ...updates };
+        setTheme(newTheme);
+
+        if (wallpaper !== undefined) {
+            if (wallpaper && wallpaper.startsWith('data:')) {
+                await DB.saveAsset('wallpaper', wallpaper);
+            } else {
+                await DB.deleteAsset('wallpaper');
             }
         }
 
-        if (finalChars.length > 0) {
-          setCharacters(finalChars);
-          const lastActiveId = localStorage.getItem('os_last_active_char_id');
-          if (lastActiveId && finalChars.find(c => c.id === lastActiveId)) {
-            setActiveCharacterId(lastActiveId);
-          } else if (finalChars.find(c => c.id === sullyV2.id)) {
-            setActiveCharacterId(sullyV2.id);
-          } else {
-            setActiveCharacterId(finalChars[0].id);
-          }
-        } else {
-          await DB.saveCharacter(initialCharacter);
-          setCharacters([initialCharacter]);
-          setActiveCharacterId(initialCharacter.id);
-        }
-
-        setGroups(dbGroups);
-        setWorldbooks(dbWorldbooks);
-        setNovels(dbNovels);
-        setCustomThemes(dbThemes);
-        if (dbUser) setUserProfile(dbUser);
-
-      } catch (err) {
-        console.error('Data init failed:', err);
-      } finally {
-        setIsDataLoaded(true);
-      }
-    };
-
-    initData();
-  }, []);
-
-  // --- NEW: Apply Theme CSS Variables ---
-  useEffect(() => {
-      const root = document.documentElement;
-      // Default fallback values match index.html
-      const h = theme.hue ?? 245;
-      const s = theme.saturation ?? 25;
-      const l = theme.lightness ?? 65;
-      
-      root.style.setProperty('--primary-hue', String(h));
-      root.style.setProperty('--primary-sat', `${s}%`);
-      root.style.setProperty('--primary-lightness', `${l}%`);
-  }, [theme]);
-
-  // --- Update: Handle Scheduled Messages with Unread Flags & Web Notifications ---
-  useEffect(() => {
-      if (!isDataLoaded || characters.length === 0) return;
-      const checkAllSchedules = async () => {
-          let hasNewMessage = false;
-          let newUnreadState = { ...unreadMessages }; // Local copy to update
-
-          for (const char of characters) {
-              try {
-                  const dueMessages = await DB.getDueScheduledMessages(char.id);
-                  if (dueMessages.length > 0) {
-                      for (const msg of dueMessages) {
-                          await DB.saveMessage({
-                               charId: msg.charId,
-                               role: 'assistant',
-                               type: 'text',
-                               content: msg.content
-                          });
-                          await DB.deleteScheduledMessage(msg.id);
-                      }
-                      hasNewMessage = true;
-                      const isChattingWithThisChar = activeApp === AppID.Chat && activeCharacterId === char.id;
-                      
-                      // If not chatting specifically with this char right now, mark as unread
-                      if (!isChattingWithThisChar) {
-                          addToast(`${char.name} 发来了一条消息`, 'success');
-                          newUnreadState[char.id] = (newUnreadState[char.id] || 0) + dueMessages.length;
-
-                          // [NEW] Web Notification Logic
-                          if (window.Notification && Notification.permission === 'granted') {
-                              try {
-                                  const notif = new Notification(char.name, {
-                                      body: dueMessages[0].content, // Preview the first message
-                                      icon: char.avatar,
-                                      silent: false
-                                  });
-                                  
-                                  // Optional: Focus window on click
-                                  notif.onclick = () => {
-                                      window.focus();
-                                      setActiveApp(AppID.Chat);
-                                      setActiveCharacterId(char.id);
-                                  };
-                              } catch (e) {
-                                  // console.error("Web Notification failed", e);
-                              }
-                          }
-                      }
-                  }
-              } catch (e) {
-                  // console.error("Schedule check failed for", char.name, e);
-              }
-          }
-          if (hasNewMessage) {
-              setLastMsgTimestamp(Date.now());
-              setUnreadMessages(newUnreadState);
-          }
-      };
-      schedulerRef.current = setInterval(checkAllSchedules, 5000);
-      checkAllSchedules();
-      return () => { if (schedulerRef.current) clearInterval(schedulerRef.current); };
-  }, [isDataLoaded, characters, activeApp, activeCharacterId, unreadMessages]); 
-
-  const clearUnread = (charId: string) => {
-      setUnreadMessages(prev => {
-          const next = { ...prev };
-          delete next[charId];
-          return next;
-      });
-  };
-
-  const updateTheme = async (updates: Partial<OSTheme>) => {
-    const { wallpaper, launcherWidgetImage, launcherWidgets, desktopDecorations, customFont, ...styleUpdates } = updates;
-    const newTheme = { ...theme, ...updates };
-    setTheme(newTheme);
-
-    // Persist large assets to IndexedDB
-    if (wallpaper !== undefined) {
-        if (wallpaper && wallpaper.startsWith('data:')) {
-            await DB.saveAsset('wallpaper', wallpaper);
-        } else {
-            await DB.deleteAsset('wallpaper');
-        }
-    }
-
-    if (launcherWidgetImage !== undefined) {
-        if (launcherWidgetImage && launcherWidgetImage.startsWith('data:')) {
-            await DB.saveAsset('launcherWidgetImage', launcherWidgetImage);
-        } else {
-            await DB.deleteAsset('launcherWidgetImage');
-        }
-    }
-
-    // Save widget images to IndexedDB (each slot is a separate asset)
-    if (launcherWidgets !== undefined) {
-        const slots = ['tl', 'tr', 'wide', 'bl', 'br'];
-        for (const slot of slots) {
-            const val = launcherWidgets[slot];
-            if (val && val.startsWith('data:')) {
-                await DB.saveAsset(`widget_${slot}`, val);
-            } else if (!val) {
-                await DB.deleteAsset(`widget_${slot}`);
+        if (launcherWidgetImage !== undefined) {
+            if (launcherWidgetImage && launcherWidgetImage.startsWith('data:')) {
+                await DB.saveAsset('launcherWidgetImage', launcherWidgetImage);
+            } else {
+                await DB.deleteAsset('launcherWidgetImage');
             }
         }
-    }
 
-    // Save desktop decoration images to IndexedDB
-    if (desktopDecorations !== undefined) {
-        // Clean up old decoration assets first
-        const allAssets = await DB.getAllAssets();
-        const oldDecoKeys = allAssets.filter(a => a.id.startsWith('deco_')).map(a => a.id);
-        for (const key of oldDecoKeys) {
-            await DB.deleteAsset(key);
-        }
-        // Save new decoration images
-        if (desktopDecorations) {
-            for (const deco of desktopDecorations) {
-                if (deco.content && deco.content.startsWith('data:') && deco.type === 'image') {
-                    await DB.saveAsset(`deco_${deco.id}`, deco.content);
+        if (launcherWidgets !== undefined) {
+            const slots = ['tl', 'tr', 'wide', 'bl', 'br'];
+            for (const slot of slots) {
+                const val = launcherWidgets[slot];
+                if (val && val.startsWith('data:')) {
+                    await DB.saveAsset(`widget_${slot}`, val);
+                } else if (!val) {
+                    await DB.deleteAsset(`widget_${slot}`);
                 }
             }
         }
-    }
 
-    // Logic for Font: Differentiate between Data URI (Blob) and URL (Web Font)
-    if (customFont !== undefined) {
-        if (customFont && customFont.startsWith('data:')) {
-            // Blob: Save to DB, Apply
-            await DB.saveAsset('custom_font_data', customFont);
-            applyCustomFont(customFont);
-        } else if (customFont && (customFont.startsWith('http') || customFont.startsWith('https'))) {
-            // Web URL: Clear Blob from DB, Apply, Save to LS (via cleanTheme below)
-            await DB.deleteAsset('custom_font_data');
-            applyCustomFont(customFont);
-        } else {
-            // Reset
-            await DB.deleteAsset('custom_font_data');
-            applyCustomFont(undefined);
+        if (desktopDecorations !== undefined) {
+            const allAssets = await DB.getAllAssets();
+            const oldDecoKeys = allAssets.filter(a => a.id.startsWith('deco_')).map(a => a.id);
+            for (const key of oldDecoKeys) {
+                await DB.deleteAsset(key);
+            }
+            if (desktopDecorations) {
+                for (const deco of desktopDecorations) {
+                    if (deco.content && deco.content.startsWith('data:') && deco.type === 'image') {
+                        await DB.saveAsset(`deco_${deco.id}`, deco.content);
+                    }
+                }
+            }
         }
-    }
 
-    // Save lightweight settings to LocalStorage (strip data URIs)
-    const lsTheme = { ...newTheme };
-    if (lsTheme.wallpaper && lsTheme.wallpaper.startsWith('data:')) lsTheme.wallpaper = '';
-    if (lsTheme.launcherWidgetImage && lsTheme.launcherWidgetImage.startsWith('data:')) lsTheme.launcherWidgetImage = '';
-    // Strip data URIs from widget slots for LS
-    if (lsTheme.launcherWidgets) {
-        const cleanWidgets: Record<string, string> = {};
-        for (const [k, v] of Object.entries(lsTheme.launcherWidgets)) {
-            cleanWidgets[k] = (v && v.startsWith('data:')) ? '' : v;
+        if (customFont !== undefined) {
+            if (customFont && customFont.startsWith('data:')) {
+                await DB.saveAsset('custom_font_data', customFont);
+                applyCustomFont(customFont);
+            } else if (customFont && (customFont.startsWith('http') || customFont.startsWith('https'))) {
+                await DB.deleteAsset('custom_font_data');
+                applyCustomFont(customFont);
+            } else {
+                await DB.deleteAsset('custom_font_data');
+                applyCustomFont(undefined);
+            }
         }
-        lsTheme.launcherWidgets = cleanWidgets;
-    }
 
-    // Strip data URIs from desktop decorations for LS
-    if (lsTheme.desktopDecorations) {
-        lsTheme.desktopDecorations = lsTheme.desktopDecorations.map(d => ({
-            ...d,
-            content: (d.content && d.content.startsWith('data:') && d.type === 'image') ? '' : d.content
-        }));
-    }
+        const lsTheme = { ...newTheme };
+        if (lsTheme.wallpaper && lsTheme.wallpaper.startsWith('data:')) lsTheme.wallpaper = '';
+        if (lsTheme.launcherWidgetImage && lsTheme.launcherWidgetImage.startsWith('data:')) lsTheme.launcherWidgetImage = '';
+        if (lsTheme.launcherWidgets) {
+            const cleanWidgets: Record<string, string> = {};
+            for (const [k, v] of Object.entries(lsTheme.launcherWidgets)) {
+                cleanWidgets[k] = (v && v.startsWith('data:')) ? '' : v;
+            }
+            lsTheme.launcherWidgets = cleanWidgets;
+        }
 
-    // Clear data URI font from LS, keep URL font
-    if (lsTheme.customFont && lsTheme.customFont.startsWith('data:')) lsTheme.customFont = '';
+        if (lsTheme.desktopDecorations) {
+            lsTheme.desktopDecorations = lsTheme.desktopDecorations.map(d => ({
+                ...d,
+                content: (d.content && d.content.startsWith('data:') && d.type === 'image') ? '' : d.content
+            }));
+        }
 
-    localStorage.setItem('os_theme', JSON.stringify(lsTheme));
-  };
-  const updateApiConfig = (updates: Partial<APIConfig>) => { const newConfig = { ...apiConfig, ...updates }; setApiConfig(newConfig); localStorage.setItem('os_api_config', JSON.stringify(newConfig)); };
-  const updateRealtimeConfig = (updates: Partial<RealtimeConfig>) => { const newConfig = { ...realtimeConfig, ...updates }; setRealtimeConfig(newConfig); localStorage.setItem('os_realtime_config', JSON.stringify(newConfig)); };
-  const saveModels = (models: string[]) => { setAvailableModels(models); localStorage.setItem('os_available_models', JSON.stringify(models)); };
-  const addApiPreset = (name: string, config: APIConfig) => { setApiPresets(prev => { const next = [...prev, { id: Date.now().toString(), name, config }]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
-  const removeApiPreset = (id: string) => { setApiPresets(prev => { const next = prev.filter(p => p.id !== id); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
-  const savePresets = (presets: ApiPreset[]) => { setApiPresets(presets); localStorage.setItem('os_api_presets', JSON.stringify(presets)); };
-  const addCharacter = async () => { const name = 'New Character'; const newChar: CharacterProfile = { id: `char-${Date.now()}`, name: name, avatar: generateAvatar(name), description: '点击编辑设定...', systemPrompt: '', memories: [], contextLimit: 500 }; setCharacters(prev => [...prev, newChar]); setActiveCharacterId(newChar.id); await DB.saveCharacter(newChar); };
-  const updateCharacter = async (id: string, updates: Partial<CharacterProfile>) => { setCharacters(prev => { const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c); const target = updated.find(c => c.id === id); if (target) DB.saveCharacter(target); return updated; }); };
-  const deleteCharacter = async (id: string) => { setCharacters(prev => { const remaining = prev.filter(c => c.id !== id); if (remaining.length > 0 && activeCharacterId === id) { setActiveCharacterId(remaining[0].id); } return remaining; }); await DB.deleteCharacter(id); };
-  
-  // Group Methods
-  const createGroup = async (name: string, members: string[]) => {
-      const newGroup: GroupProfile = {
-          id: `group-${Date.now()}`,
-          name,
-          members,
-          avatar: generateAvatar(name), 
-          createdAt: Date.now()
-      };
-      await DB.saveGroup(newGroup);
-      setGroups(prev => [...prev, newGroup]);
-  };
+        if (lsTheme.customFont && lsTheme.customFont.startsWith('data:')) lsTheme.customFont = '';
 
-  const deleteGroup = async (id: string) => {
-      await DB.deleteGroup(id);
-      setGroups(prev => prev.filter(g => g.id !== id));
-  };
+        localStorage.setItem('os_theme', JSON.stringify(lsTheme));
+    };
+    const updateApiConfig = (updates: Partial<APIConfig>) => { const newConfig = { ...apiConfig, ...updates }; setApiConfig(newConfig); localStorage.setItem('os_api_config', JSON.stringify(newConfig)); };
+    const updateRealtimeConfig = (updates: Partial<RealtimeConfig>) => { const newConfig = { ...realtimeConfig, ...updates }; setRealtimeConfig(newConfig); localStorage.setItem('os_realtime_config', JSON.stringify(newConfig)); };
+    // TTS 配置更新 — 深层 merge 嵌套对象（voiceSetting / audioSetting / voiceModify / preprocessConfig）
+    const updateTtsConfig = (updates: Partial<TtsConfig>) => {
+        setTtsConfig(prev => {
+            const newConfig: TtsConfig = {
+                ...prev,
+                ...updates,
+                voiceSetting: { ...prev.voiceSetting, ...(updates.voiceSetting || {}) },
+                audioSetting: { ...prev.audioSetting, ...(updates.audioSetting || {}) },
+                preprocessConfig: { ...prev.preprocessConfig, ...(updates.preprocessConfig || {}) },
+            };
+            // voiceModify 可选，只在有值时 merge
+            if (updates.voiceModify !== undefined) {
+                newConfig.voiceModify = updates.voiceModify === null ? undefined : { ...(prev.voiceModify || { pitch: 0, intensity: 0, timbre: 0 }), ...updates.voiceModify };
+            }
+            // pronunciationDict 可选
+            if (updates.pronunciationDict !== undefined) {
+                newConfig.pronunciationDict = updates.pronunciationDict;
+            }
+            localStorage.setItem('os_tts_config', JSON.stringify(newConfig));
+            return newConfig;
+        });
+    };
+    const saveModels = (models: string[]) => { setAvailableModels(models); localStorage.setItem('os_available_models', JSON.stringify(models)); };
+    const addApiPreset = (name: string, config: APIConfig) => { setApiPresets(prev => { const next = [...prev, { id: Date.now().toString(), name, config }]; localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
+    const removeApiPreset = (id: string) => { setApiPresets(prev => { const next = prev.filter(p => p.id !== id); localStorage.setItem('os_api_presets', JSON.stringify(next)); return next; }); };
+    const savePresets = (presets: ApiPreset[]) => { setApiPresets(presets); localStorage.setItem('os_api_presets', JSON.stringify(presets)); };
+    const addCharacter = async () => { const name = 'New Character'; const newChar: CharacterProfile = { id: `char-${Date.now()}`, name: name, avatar: generateAvatar(name), description: '点击编辑设定...', systemPrompt: '', memories: [], contextLimit: 500 }; setCharacters(prev => [...prev, newChar]); setActiveCharacterId(newChar.id); await DB.saveCharacter(newChar); };
+    const updateCharacter = async (id: string, updates: Partial<CharacterProfile>) => { setCharacters(prev => { const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c); const target = updated.find(c => c.id === id); if (target) DB.saveCharacter(target); return updated; }); };
+    const deleteCharacter = async (id: string) => { setCharacters(prev => { const remaining = prev.filter(c => c.id !== id); if (remaining.length > 0 && activeCharacterId === id) { setActiveCharacterId(remaining[0].id); } return remaining; }); await DB.deleteCharacter(id); };
 
-  // Worldbook Methods
-  const addWorldbook = async (wb: Worldbook) => {
-      setWorldbooks(prev => [...prev, wb]);
-      await DB.saveWorldbook(wb);
-  };
+    // Group Methods
+    const createGroup = async (name: string, members: string[]) => {
+        const newGroup: GroupProfile = {
+            id: `group-${Date.now()}`,
+            name,
+            members,
+            avatar: generateAvatar(name),
+            createdAt: Date.now()
+        };
+        await DB.saveGroup(newGroup);
+        setGroups(prev => [...prev, newGroup]);
+    };
 
-  const updateWorldbook = async (id: string, updates: Partial<Worldbook>) => {
-      // 1. Optimistic Update Local State
-      let fullUpdatedWb: Worldbook | undefined;
-      setWorldbooks(prev => {
-          const next = prev.map(wb => {
-              if (wb.id === id) {
-                  fullUpdatedWb = { ...wb, ...updates, updatedAt: Date.now() };
-                  return fullUpdatedWb;
-              }
-              return wb;
-          });
-          return next;
-      });
+    const deleteGroup = async (id: string) => {
+        await DB.deleteGroup(id);
+        setGroups(prev => prev.filter(g => g.id !== id));
+    };
 
-      // 2. Persist to DB
-      if (fullUpdatedWb) {
-          await DB.saveWorldbook(fullUpdatedWb);
+    // Worldbook Methods
+    const addWorldbook = async (wb: Worldbook) => {
+        setWorldbooks(prev => [...prev, wb]);
+        await DB.saveWorldbook(wb);
+    };
 
-          // 3. AUTO-SYNC: Update Characters that have this book mounted
-          // This ensures data redundancy is kept fresh
-          const charsToSync = characters.filter(c => c.mountedWorldbooks?.some(m => m.id === id));
-          
-          if (charsToSync.length > 0) {
-              const updatedChars = characters.map(char => {
-                  if (char.mountedWorldbooks?.some(m => m.id === id)) {
-                      const newMounted = char.mountedWorldbooks.map(m => 
-                          m.id === id 
-                              // Updated to sync category as well
-                              ? { 
-                                  id: fullUpdatedWb!.id, 
-                                  title: fullUpdatedWb!.title, 
-                                  content: fullUpdatedWb!.content,
-                                  category: fullUpdatedWb!.category
-                                } 
-                              : m
-                      );
-                      // Side effect: Save individual char to DB
-                      const newChar = { ...char, mountedWorldbooks: newMounted };
-                      DB.saveCharacter(newChar); 
-                      return newChar;
-                  }
-                  return char;
-              });
-              setCharacters(updatedChars);
-              addToast(`已同步更新 ${charsToSync.length} 个相关角色的缓存`, 'info');
-          }
-      }
-  };
+    const updateWorldbook = async (id: string, updates: Partial<Worldbook>) => {
+        let fullUpdatedWb: Worldbook | undefined;
+        setWorldbooks(prev => {
+            const next = prev.map(wb => {
+                if (wb.id === id) {
+                    fullUpdatedWb = { ...wb, ...updates, updatedAt: Date.now() };
+                    return fullUpdatedWb;
+                }
+                return wb;
+            });
+            return next;
+        });
 
-  const deleteWorldbook = async (id: string) => {
-      setWorldbooks(prev => prev.filter(wb => wb.id !== id));
-      await DB.deleteWorldbook(id);
-      
-      // Sync delete: Remove from characters
-      const updatedChars = characters.map(char => {
-          if (char.mountedWorldbooks?.some(m => m.id === id)) {
-              const newMounted = char.mountedWorldbooks.filter(m => m.id !== id);
-              const newChar = { ...char, mountedWorldbooks: newMounted };
-              DB.saveCharacter(newChar);
-              return newChar;
-          }
-          return char;
-      });
-      setCharacters(updatedChars);
-      addToast('世界书已删除 (同步移除角色挂载)', 'success');
-  };
+        if (fullUpdatedWb) {
+            await DB.saveWorldbook(fullUpdatedWb);
 
-  // Novel Methods (New)
-  const addNovel = async (novel: NovelBook) => {
-      setNovels(prev => [novel, ...prev]);
-      await DB.saveNovel(novel);
-  };
+            const charsToSync = characters.filter(c => c.mountedWorldbooks?.some(m => m.id === id));
 
-  const updateNovel = async (id: string, updates: Partial<NovelBook>) => {
-      setNovels(prev => {
-          const next = prev.map(n => n.id === id ? { ...n, ...updates, lastActiveAt: Date.now() } : n);
-          const target = next.find(n => n.id === id);
-          if (target) DB.saveNovel(target);
-          return next;
-      });
-  };
+            if (charsToSync.length > 0) {
+                const updatedChars = characters.map(char => {
+                    if (char.mountedWorldbooks?.some(m => m.id === id)) {
+                        const newMounted = char.mountedWorldbooks.map(m =>
+                            m.id === id
+                                ? {
+                                    id: fullUpdatedWb!.id,
+                                    title: fullUpdatedWb!.title,
+                                    content: fullUpdatedWb!.content,
+                                    category: fullUpdatedWb!.category,
+                                    position: fullUpdatedWb!.position
+                                }
+                                : m
+                        );
+                        const newChar = { ...char, mountedWorldbooks: newMounted };
+                        DB.saveCharacter(newChar);
+                        return newChar;
+                    }
+                    return char;
+                });
+                setCharacters(updatedChars);
+                addToast(`已同步更新 ${charsToSync.length} 个相关角色的缓存`, 'info');
+            }
+        }
+    };
 
-  const deleteNovel = async (id: string) => {
-      setNovels(prev => prev.filter(n => n.id !== id));
-      await DB.deleteNovel(id);
-  };
+    const deleteWorldbook = async (id: string) => {
+        setWorldbooks(prev => prev.filter(wb => wb.id !== id));
+        await DB.deleteWorldbook(id);
 
-  const updateUserProfile = async (updates: Partial<UserProfile>) => { setUserProfile(prev => { const next = { ...prev, ...updates }; DB.saveUserProfile(next); return next; }); };
-  const addCustomTheme = async (theme: ChatTheme) => { setCustomThemes(prev => { const exists = prev.find(t => t.id === theme.id); if (exists) return prev.map(t => t.id === theme.id ? theme : t); return [...prev, theme]; }); await DB.saveTheme(theme); };
-  const removeCustomTheme = async (id: string) => { setCustomThemes(prev => prev.filter(t => t.id !== id)); await DB.deleteTheme(id); };
-  const setCustomIcon = async (appId: string, iconUrl: string | undefined) => { setCustomIcons(prev => { const next = { ...prev }; if (iconUrl) next[appId] = iconUrl; else delete next[appId]; return next; }); if (iconUrl) { await DB.saveAsset(`icon_${appId}`, iconUrl); } else { await DB.deleteAsset(`icon_${appId}`); } };
-  const handleSetActiveCharacter = (id: string) => { setActiveCharacterId(id); localStorage.setItem('os_last_active_char_id', id); };
-  const addToast = (message: string, type: Toast['type'] = 'info') => { const id = Date.now().toString(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 3000); };
+        const updatedChars = characters.map(char => {
+            if (char.mountedWorldbooks?.some(m => m.id === id)) {
+                const newMounted = char.mountedWorldbooks.filter(m => m.id !== id);
+                const newChar = { ...char, mountedWorldbooks: newMounted };
+                DB.saveCharacter(newChar);
+                return newChar;
+            }
+            return char;
+        });
+        setCharacters(updatedChars);
+        addToast('世界书已删除 (同步移除角色挂载)', 'success');
+    };
 
-  // --- MODIFIED EXPORT SYSTEM WITH SEPARATED ASSETS ZIP ---
-  const exportSystem = async (mode: 'text_only' | 'media_only' | 'full'): Promise<Blob> => {
-      try {
-          setSysOperation({ status: 'processing', message: '正在初始化打包引擎...', progress: 0 });
-          
-          const JSZip = await loadJSZip();
-          const zip = new JSZip();
-          const assetsFolder = zip.folder("assets");
-          let assetCount = 0;
+    // Novel Methods
+    const addNovel = async (novel: NovelBook) => {
+        setNovels(prev => [novel, ...prev]);
+        await DB.saveNovel(novel);
+    };
 
-          // Strip Base64 Images (Recursive) - Used for Text Only Mode
-          const stripBase64 = (obj: any): any => {
-              if (typeof obj === 'string') {
-                  if (obj.startsWith('data:image')) return '';
-                  return obj;
-              }
-              if (Array.isArray(obj)) {
-                  return obj.map(item => stripBase64(item));
-              }
-              if (obj !== null && typeof obj === 'object') {
-                  const newObj: any = {};
-                  for (const key in obj) {
-                      if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                          newObj[key] = stripBase64(obj[key]);
-                      }
-                  }
-                  return newObj;
-              }
-              return obj;
-          };
+    const updateNovel = async (id: string, updates: Partial<NovelBook>) => {
+        setNovels(prev => {
+            const next = prev.map(n => n.id === id ? { ...n, ...updates, lastActiveAt: Date.now() } : n);
+            const target = next.find(n => n.id === id);
+            if (target) DB.saveNovel(target);
+            return next;
+        });
+    };
 
-          // Extract Images to ZIP (Recursive) - Used for Media/Theme Mode
-          const processObject = (obj: any): any => {
-              if (obj === null || typeof obj !== 'object') return obj;
-              
-              if (Array.isArray(obj)) {
-                  return obj.map(item => processObject(item));
-              }
+    const deleteNovel = async (id: string) => {
+        setNovels(prev => prev.filter(n => n.id !== id));
+        await DB.deleteNovel(id);
+    };
 
-              const newObj: any = {};
-              for (const key in obj) {
-                  if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                      let value = obj[key];
-                      if (typeof value === 'string' && value.startsWith('data:image/')) {
-                          try {
-                              const extMatch = value.match(/data:image\/([a-zA-Z0-9]+);base64,/);
-                              if (extMatch) {
-                                  const ext = extMatch[1] === 'jpeg' ? 'jpg' : extMatch[1];
-                                  const filename = `asset_${Date.now()}_${assetCount++}.${ext}`;
-                                  const base64Data = value.split(',')[1];
-                                  assetsFolder?.file(filename, base64Data, { base64: true });
-                                  value = `assets/${filename}`;
-                              }
-                          } catch (e) {
-                              console.warn("Failed to process asset", e);
-                          }
-                      } else {
-                          value = processObject(value);
-                      }
-                      newObj[key] = value;
-                  }
-              }
-              return newObj;
-          };
+    const updateUserProfile = async (updates: Partial<UserProfile>) => { setUserProfile(prev => { const next = { ...prev, ...updates }; DB.saveUserProfile(next); return next; }); };
+    const addCustomTheme = async (theme: ChatTheme) => { setCustomThemes(prev => { const exists = prev.find(t => t.id === theme.id); if (exists) return prev.map(t => t.id === theme.id ? theme : t); return [...prev, theme]; }); await DB.saveTheme(theme); };
+    const removeCustomTheme = async (id: string) => { setCustomThemes(prev => prev.filter(t => t.id !== id)); await DB.deleteTheme(id); };
+    const setCustomIcon = async (appId: string, iconUrl: string | undefined) => { setCustomIcons(prev => { const next = { ...prev }; if (iconUrl) next[appId] = iconUrl; else delete next[appId]; return next; }); if (iconUrl) { await DB.saveAsset(`icon_${appId}`, iconUrl); } else { await DB.deleteAsset(`icon_${appId}`); } };
+    const handleSetActiveCharacter = (id: string) => { setActiveCharacterId(id); localStorage.setItem('os_last_active_char_id', id); };
 
-          // 1. Define Stores to Process based on Mode
-          let storesToProcess: string[] = [];
-          const allStores = [
-              'characters', 'messages', 'themes', 'emojis', 'assets', 'gallery',
-              'user_profile', 'diaries', 'tasks', 'anniversaries', 'room_todos',
-              'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games', 'worldbooks', 'novels',
-              'bank_transactions', 'bank_data',
-              'xhs_activities', 'xhs_stock'
-          ];
+    // --- System Export/Import ---
+    const exportSystem = async (mode: 'text_only' | 'media_only' | 'full'): Promise<Blob> => {
+        try {
+            setSysOperation({ status: 'processing', message: '正在初始化...', progress: 0 });
+            const stateSnapshot: ExportStateSnapshot = { apiConfig, apiPresets, availableModels, realtimeConfig, ttsConfig, theme };
+            const blob = await exportSystemData(mode, stateSnapshot, (message, progress) => {
+                setSysOperation({ status: 'processing', message, progress });
+            });
+            setSysOperation({ status: 'idle', message: '', progress: 100 });
+            return blob;
+        } catch (e: any) {
+            console.error("Export Failed", e);
+            setSysOperation({ status: 'idle', message: '', progress: 0 });
+            throw new Error("导出失败: " + e.message);
+        }
+    };
 
-          if (mode === 'full') {
-              storesToProcess = allStores; // Include everything
-          } else if (mode === 'text_only') {
-              storesToProcess = allStores.filter(s => s !== 'assets'); // Exclude raw assets store
-          } else if (mode === 'media_only') {
-              // media_only now includes themes/assets for complete media backup
-              storesToProcess = ['gallery', 'emojis', 'journal_stickers', 'user_profile', 'characters', 'messages', 'themes', 'assets', 'bank_data'];
-          }
+    const importSystem = async (fileOrJson: File | string): Promise<void> => {
+        try {
+            setSysOperation({ status: 'processing', message: '正在解析...', progress: 0 });
+            const importCallbacks: ImportCallbacks = {
+                updateTheme, updateApiConfig, saveModels, savePresets, updateRealtimeConfig,
+                setCharacters, setGroups, setCustomThemes, setUserProfile, setWorldbooks, setNovels, setCustomIcons, addToast
+            };
+            await importSystemData(fileOrJson, (message, progress) => {
+                setSysOperation({ status: 'processing', message, progress });
+            }, importCallbacks);
+            setSysOperation({ status: 'idle', message: '', progress: 100 });
+        } catch (e: any) {
+            console.error("Import Error:", e);
+            setSysOperation({ status: 'idle', message: '', progress: 0 });
+            const msg = e instanceof SyntaxError ? 'JSON 格式错误' : (e.message || '未知错误');
+            throw new Error(`恢复失败: ${msg}`);
+        }
+    };
 
-          // Fetch Social App & Room Assets (Optional, depends on mode)
-          const sparkUserBg = await DB.getAsset('spark_user_bg');
-          const sparkSocialProfile = await DB.getAsset('spark_social_profile');
-          const roomCustomAssets = await DB.getAsset('room_custom_assets_list');
+    const resetSystem = async () => { try { await DB.deleteDB(); localStorage.clear(); window.location.reload(); } catch (e) { console.error(e); addToast('重置失败，请手动清除浏览器数据', 'error'); } };
 
-          const backupData: Partial<FullBackupData> = {
-              timestamp: Date.now(),
-              version: 2,
-              apiConfig: (mode === 'text_only' || mode === 'full') ? apiConfig : undefined,
-              apiPresets: (mode === 'text_only' || mode === 'full') ? apiPresets : undefined,
-              availableModels: (mode === 'text_only' || mode === 'full') ? availableModels : undefined,
-              realtimeConfig: (mode === 'text_only' || mode === 'full') ? realtimeConfig : undefined,
-              theme: theme, // Include theme in all modes (text/media)
-              
-              socialAppData: (mode === 'text_only' || mode === 'media_only' || mode === 'full') ? {
-                  charHandles: JSON.parse(localStorage.getItem('spark_char_handles') || '{}'),
-                  userProfile: sparkSocialProfile ? JSON.parse(sparkSocialProfile) : undefined,
-                  userId: localStorage.getItem('spark_user_id') || undefined,
-                  userBg: sparkUserBg || undefined
-              } : undefined,
-              
-              roomCustomAssets: (mode === 'text_only' || mode === 'media_only' || mode === 'full') ? (roomCustomAssets ? JSON.parse(roomCustomAssets) : []) : undefined,
-              mediaAssets: [], // Initialize mediaAssets array
-          };
+    // Compose the full value object, merging sub-contexts + data context
+    const value: OSContextType = {
+        // From AppContext
+        ...appCtx,
+        // From NotificationContext
+        ...notifCtx,
+        // Data + Config
+        theme,
+        updateTheme,
+        apiConfig,
+        updateApiConfig,
+        isDataLoaded,
+        characters,
+        activeCharacterId,
+        addCharacter,
+        updateCharacter,
+        deleteCharacter,
+        setActiveCharacterId: handleSetActiveCharacter,
+        worldbooks,
+        addWorldbook,
+        updateWorldbook,
+        deleteWorldbook,
+        novels,
+        addNovel,
+        updateNovel,
+        deleteNovel,
+        groups,
+        createGroup,
+        deleteGroup,
+        userProfile,
+        updateUserProfile,
+        availableModels,
+        setAvailableModels: saveModels,
+        apiPresets,
+        addApiPreset,
+        removeApiPreset,
+        realtimeConfig,
+        updateRealtimeConfig,
+        ttsConfig,
+        updateTtsConfig,
+        customThemes,
+        addCustomTheme,
+        removeCustomTheme,
+        customIcons,
+        setCustomIcon,
+        exportSystem,
+        importSystem,
+        resetSystem,
+        sysOperation,
+        systemLogs,
+        clearLogs,
+    };
 
-          const totalSteps = storesToProcess.length + 3;
-          let currentStep = 0;
-
-          // Pre-process specialized image fields (Social App, Theme)
-          if (mode !== 'text_only') {
-              if (backupData.socialAppData?.userProfile) backupData.socialAppData.userProfile = processObject(backupData.socialAppData.userProfile);
-              if (backupData.socialAppData?.userBg) backupData.socialAppData.userBg = processObject(backupData.socialAppData.userBg);
-              if (backupData.roomCustomAssets) backupData.roomCustomAssets = processObject(backupData.roomCustomAssets);
-              if (backupData.theme) backupData.theme = processObject(backupData.theme);
-          } else {
-              // Strip images for text only
-              if (backupData.socialAppData?.userProfile) backupData.socialAppData.userProfile = stripBase64(backupData.socialAppData.userProfile);
-              if (backupData.socialAppData?.userBg) backupData.socialAppData.userBg = stripBase64(backupData.socialAppData.userBg);
-              if (backupData.roomCustomAssets) backupData.roomCustomAssets = stripBase64(backupData.roomCustomAssets);
-              if (backupData.theme) {
-                  // Save preset decoration content before stripping (SVGs start with data:image and would be stripped)
-                  const savedPresetDecos = backupData.theme.desktopDecorations
-                      ?.filter(d => d.type === 'preset')
-                      .map(d => ({ id: d.id, content: d.content }));
-                  backupData.theme = stripBase64(backupData.theme);
-                  // Restore preset SVGs and remove image decorations (they have no data in text mode)
-                  if (backupData.theme.desktopDecorations && savedPresetDecos) {
-                      backupData.theme.desktopDecorations = backupData.theme.desktopDecorations
-                          .map(d => {
-                              const saved = savedPresetDecos.find(p => p.id === d.id);
-                              return saved ? { ...d, content: saved.content } : d;
-                          })
-                          .filter(d => d.content && d.content !== '');
-                  }
-              }
-          }
-
-          for (const storeName of storesToProcess) {
-              currentStep++;
-              setSysOperation({ 
-                  status: 'processing', 
-                  message: `正在打包: ${storeName} ...`, 
-                  progress: (currentStep / totalSteps) * 100 
-              });
-
-              let rawData = await DB.getRawStoreData(storeName); 
-              let processedData: any;
-
-              // --- MODE SPECIFIC FILTERING ---
-
-              if (mode === 'text_only') {
-                  processedData = stripBase64(rawData);
-              } else {
-                  // Media & Theme Mode: Extract Images
-                  
-                  if (storeName === 'messages' && mode === 'media_only') {
-                      // Filter messages: Only keep image/emoji types
-                      rawData = rawData.filter((m: Message) => m.type === 'image' || m.type === 'emoji');
-                  }
-
-                  if (storeName === 'characters' && mode === 'media_only') {
-                      // Character Logic: Export ONLY visual assets to mediaAssets array
-                      // Do not export the full character array to avoid overwriting text data on import
-                      const mediaList = rawData.map((c: CharacterProfile) => {
-                          const extracted = {
-                              charId: c.id,
-                              avatar: c.avatar, 
-                              sprites: c.sprites,
-                              roomItems: c.roomConfig?.items?.reduce((acc: any, item: any) => {
-                                  if (item.image && item.image.startsWith('data:')) {
-                                      acc[item.id] = item.image;
-                                  }
-                                  return acc;
-                              }, {}),
-                              backgrounds: {
-                                  chat: c.chatBackground,
-                                  date: c.dateBackground,
-                                  roomWall: c.roomConfig?.wallImage,
-                                  roomFloor: c.roomConfig?.floorImage
-                              }
-                          };
-                          return processObject(extracted);
-                      });
-                      backupData.mediaAssets = mediaList;
-                      continue; // Skip standard assignment
-                  }
-
-                  processedData = processObject(rawData);
-              }
-
-              // Assign to Backup Data
-              switch(storeName) {
-                  case 'characters': if(mode !== 'media_only') backupData.characters = processedData; break;
-                  case 'messages': backupData.messages = processedData; break;
-                  case 'themes': backupData.customThemes = processedData; break;
-                  case 'emojis': backupData.savedEmojis = processedData; break;
-                  case 'assets': backupData.assets = processedData; break;
-                  case 'gallery': backupData.galleryImages = processedData; break;
-                  case 'user_profile': if (processedData[0]) backupData.userProfile = processedData[0]; break;
-                  case 'diaries': backupData.diaries = processedData; break;
-                  case 'tasks': backupData.tasks = processedData; break;
-                  case 'anniversaries': backupData.anniversaries = processedData; break;
-                  case 'room_todos': backupData.roomTodos = processedData; break;
-                  case 'room_notes': backupData.roomNotes = processedData; break;
-                  case 'groups': backupData.groups = processedData; break;
-                  case 'journal_stickers': backupData.savedJournalStickers = processedData; break;
-                  case 'social_posts': backupData.socialPosts = processedData; break;
-                  case 'courses': backupData.courses = processedData; break;
-                  case 'games': backupData.games = processedData; break;
-                  case 'worldbooks': backupData.worldbooks = processedData; break;
-                  case 'novels': backupData.novels = processedData; break;
-                  case 'bank_transactions': backupData.bankTransactions = processedData; break;
-                  case 'bank_data': {
-                      if (Array.isArray(processedData)) {
-                          const mainState = processedData.find((d: any) => d.id === 'main_state');
-                          const dollhouseRecord = processedData.find((d: any) => d.id === 'dollhouse_state');
-                          backupData.bankState = mainState ? { ...mainState, id: undefined } : undefined;
-                          backupData.bankDollhouse = dollhouseRecord?.data || undefined;
-                      }
-                      break;
-                  }
-                  case 'xhs_activities': backupData.xhsActivities = processedData; break;
-                  case 'xhs_stock': backupData.xhsStockImages = processedData; break;
-              }
-
-              await new Promise(resolve => setTimeout(resolve, 10));
-          }
-
-          setSysOperation({ status: 'processing', message: '正在生成压缩包...', progress: 95 });
-          
-          zip.file("data.json", JSON.stringify(backupData));
-          
-          const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
-              if (Math.random() > 0.8) {
-                  setSysOperation(prev => ({ ...prev, message: `压缩中 ${metadata.percent.toFixed(0)}%...` }));
-              }
-          });
-
-          setSysOperation({ status: 'idle', message: '', progress: 100 });
-          return content;
-
-      } catch (e: any) {
-          console.error("Export Failed", e);
-          setSysOperation({ status: 'idle', message: '', progress: 0 });
-          throw new Error("导出失败: " + e.message);
-      }
-  };
-
-  const importSystem = async (fileOrJson: File | string): Promise<void> => {
-      try {
-          setSysOperation({ status: 'processing', message: '正在解析备份文件...', progress: 0 });
-          let data: FullBackupData;
-          let zip: JSZipLike | null = null;
-
-          if (typeof fileOrJson === 'string') {
-              data = JSON.parse(fileOrJson);
-          } else {
-              if (!fileOrJson.name.endsWith('.zip')) {
-                  try {
-                      const text = await fileOrJson.text();
-                      data = JSON.parse(text);
-                  } catch (e) {
-                      throw new Error("无效的文件格式，请上传 .zip 或 .json");
-                  }
-              } else {
-                  const JSZip = await loadJSZip();
-                  const loadedZip = await JSZip.loadAsync(fileOrJson);
-                  zip = loadedZip;
-                  const dataFile = loadedZip.file("data.json");
-                  if (!dataFile) throw new Error("损坏的备份包: 缺少 data.json");
-                  const jsonStr = await dataFile.async("string");
-                  data = JSON.parse(jsonStr);
-              }
-          }
-
-          const restoreAssets = async (obj: any): Promise<any> => {
-              if (obj === null || typeof obj !== 'object') return obj;
-              
-              if (Array.isArray(obj)) {
-                  const arr = [];
-                  for (const item of obj) {
-                      arr.push(await restoreAssets(item));
-                  }
-                  return arr;
-              }
-
-              const newObj: any = {};
-              for (const key in obj) {
-                  if (Object.prototype.hasOwnProperty.call(obj, key)) {
-                      let value = obj[key];
-                      if (typeof value === 'string' && value.startsWith('assets/') && zip) {
-                          try {
-                              const filename = value.split('/')[1];
-                              const fileInZip = zip.file(`assets/${filename}`);
-                              if (fileInZip) {
-                                  const base64 = await fileInZip.async("base64");
-                                  const ext = filename.split('.').pop() || 'png';
-                                  let mime = 'image/png';
-                                  if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
-                                  if (ext === 'gif') mime = 'image/gif';
-                                  if (ext === 'webp') mime = 'image/webp';
-                                  
-                                  value = `data:${mime};base64,${base64}`;
-                              }
-                          } catch (e) {
-                              console.warn(`Failed to restore asset: ${value}`);
-                          }
-                      } else {
-                          value = await restoreAssets(value);
-                      }
-                      newObj[key] = value;
-                  }
-              }
-              return newObj;
-          };
-
-          setSysOperation({ status: 'processing', message: '正在恢复数据与素材...', progress: 50 });
-          
-          if (zip) {
-              data = await restoreAssets(data);
-          }
-
-          await DB.importFullData(data);
-          
-          if (data.theme) {
-              const cleanTheme = { ...data.theme };
-              // Modified: Delete key instead of setting to empty string if it's a data URI
-              // This prevents updateTheme from triggering DB deletion for these assets if they were just restored to DB.
-              if (cleanTheme.wallpaper && cleanTheme.wallpaper.startsWith('data:')) { delete cleanTheme.wallpaper; }
-              if (cleanTheme.launcherWidgetImage && cleanTheme.launcherWidgetImage.startsWith('data:')) { delete cleanTheme.launcherWidgetImage; }
-              if (cleanTheme.launcherWidgets) {
-                  const cw = { ...cleanTheme.launcherWidgets };
-                  for (const k of Object.keys(cw)) { if (cw[k]?.startsWith('data:')) delete cw[k]; }
-                  cleanTheme.launcherWidgets = Object.keys(cw).length > 0 ? cw : undefined;
-              }
-              if (cleanTheme.customFont && cleanTheme.customFont.startsWith('data:')) { delete cleanTheme.customFont; }
-              // For desktop decorations: keep preset SVGs, strip uploaded image data URIs (they'll be re-saved by updateTheme from the data)
-              // Note: uploaded image decorations with data: content are passed through so updateTheme can save them to DB
-              updateTheme(cleanTheme);
-          }
-          if (data.apiConfig) updateApiConfig(data.apiConfig);
-          if (data.availableModels) saveModels(data.availableModels);
-          if (data.apiPresets) savePresets(data.apiPresets);
-          if (data.realtimeConfig) updateRealtimeConfig(data.realtimeConfig); // 恢复实时感知配置
-          
-          if (data.socialAppData) {
-              if (data.socialAppData.charHandles) localStorage.setItem('spark_char_handles', JSON.stringify(data.socialAppData.charHandles));
-              if (data.socialAppData.userId) localStorage.setItem('spark_user_id', data.socialAppData.userId);
-              
-              // Restore heavy assets to DB
-              if (data.socialAppData.userProfile) await DB.saveAsset('spark_social_profile', JSON.stringify(data.socialAppData.userProfile));
-              if (data.socialAppData.userBg) await DB.saveAsset('spark_user_bg', data.socialAppData.userBg);
-          }
-          
-          // Restore Room Custom Assets to DB
-          if (data.roomCustomAssets) {
-              await DB.saveAsset('room_custom_assets_list', JSON.stringify(data.roomCustomAssets));
-          }
-
-          const chars = await DB.getAllCharacters();
-          const groupsList = await DB.getGroups();
-          const themes = await DB.getThemes();
-          const user = await DB.getUserProfile();
-          const books = await DB.getAllWorldbooks();
-          const novelList = await DB.getAllNovels();
-          
-          if (data.assets) {
-              const assets = await DB.getAllAssets();
-              const loadedIcons: Record<string, string> = {};
-              if (Array.isArray(assets)) {
-                  assets.forEach(a => { if (a.id.startsWith('icon_')) loadedIcons[a.id.replace('icon_', '')] = a.data; });
-              }
-              setCustomIcons(loadedIcons);
-          }
-
-          if (chars.length > 0) setCharacters(chars);
-          if (groupsList.length > 0) setGroups(groupsList);
-          if (themes.length > 0) setCustomThemes(themes);
-          if (user) setUserProfile(user);
-          if (books.length > 0) setWorldbooks(books);
-          if (novelList.length > 0) setNovels(novelList);
-          
-          setSysOperation({ status: 'idle', message: '', progress: 100 });
-          addToast('恢复成功，系统即将重启...', 'success');
-          setTimeout(() => window.location.reload(), 1500);
-
-      } catch (e: any) {
-          console.error("Import Error:", e);
-          setSysOperation({ status: 'idle', message: '', progress: 0 });
-          const msg = e instanceof SyntaxError ? 'JSON 格式错误' : (e.message || '未知错误');
-          throw new Error(`恢复失败: ${msg}`);
-      }
-  };
-
-  const resetSystem = async () => { try { await DB.deleteDB(); localStorage.clear(); window.location.reload(); } catch (e) { console.error(e); addToast('重置失败，请手动清除浏览器数据', 'error'); } };
-  const openApp = (appId: AppID) => setActiveApp(appId);
-  const closeApp = () => setActiveApp(AppID.Launcher);
-  const unlock = () => setIsLocked(false);
-
-  // --- Back Handler Logic ---
-  const registerBackHandler = useCallback((handler: () => boolean) => {
-      backHandlerRef.current = handler;
-      return () => {
-          if (backHandlerRef.current === handler) {
-              backHandlerRef.current = null;
-          }
-      };
-  }, []);
-
-  const handleBack = useCallback(() => {
-      if (backHandlerRef.current) {
-          const handled = backHandlerRef.current();
-          if (handled) return;
-      }
-      // Default: Close App
-      if (activeApp !== AppID.Launcher) {
-          closeApp();
-      }
-  }, [activeApp, closeApp]);
-
-  const value: OSContextType = {
-    activeApp,
-    openApp,
-    closeApp,
-    theme,
-    updateTheme,
-    virtualTime,
-    apiConfig,
-    updateApiConfig,
-    isLocked,
-    unlock,
-    isDataLoaded,
-    characters,
-    activeCharacterId,
-    addCharacter,
-    updateCharacter,
-    deleteCharacter,
-    setActiveCharacterId,
-    worldbooks,
-    addWorldbook,
-    updateWorldbook,
-    deleteWorldbook,
-    novels,
-    addNovel,
-    updateNovel,
-    deleteNovel,
-    groups,
-    createGroup,
-    deleteGroup,
-    userProfile,
-    updateUserProfile,
-    availableModels,
-    setAvailableModels,
-    apiPresets,
-    addApiPreset,
-    removeApiPreset,
-    realtimeConfig,
-    updateRealtimeConfig,
-    customThemes,
-    addCustomTheme,
-    removeCustomTheme,
-    toasts,
-    addToast,
-    customIcons,
-    setCustomIcon,
-    lastMsgTimestamp,
-    unreadMessages,
-    clearUnread,
-    exportSystem,
-    importSystem,
-    resetSystem,
-    sysOperation,
-    systemLogs,
-    clearLogs,
-    registerBackHandler,
-    handleBack
-  };
-
-  return (
-    <OSContext.Provider value={value}>
-      {children}
-    </OSContext.Provider>
-  );
+    return (
+        <OSContext.Provider value={value}>
+            {children}
+        </OSContext.Provider>
+    );
 };
 
+/**
+ * Composite Provider: wraps sub-context providers around the data provider.
+ * This is the single entry point that replaces the old monolithic OSProvider.
+ */
+export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const [hapticsEnabled, setHapticsEnabledState] = useState(() => {
+        try { const v = localStorage.getItem('os_haptics_enabled'); return v === null ? true : v === 'true'; } catch { return true; }
+    });
+
+    const setHapticsEnabled = (v: boolean) => {
+        setHapticsEnabledState(v);
+        setHapticsEnabledGlobal(v);
+        try { localStorage.setItem('os_haptics_enabled', String(v)); } catch { /* ignore */ }
+    };
+
+    // Sync global flag on mount
+    useEffect(() => { setHapticsEnabledGlobal(hapticsEnabled); }, []);
+
+    return (
+        <NotificationProvider>
+            <AppProvider hapticsEnabled={hapticsEnabled} setHapticsEnabled={setHapticsEnabled}>
+                <OSDataProvider>
+                    {children}
+                </OSDataProvider>
+            </AppProvider>
+        </NotificationProvider>
+    );
+};
+
+/**
+ * Backward-compatible hook — returns ALL context values as before.
+ * New code can use useApp() or useNotification() for more targeted subscriptions.
+ */
 export const useOS = () => {
-  const context = useContext(OSContext);
-  if (context === undefined) {
-    throw new Error('useOS must be used within an OSProvider');
-  }
-  return context;
+    const context = useContext(OSContext);
+    if (context === undefined) {
+        throw new Error('useOS must be used within an OSProvider');
+    }
+    return context;
 };

@@ -1,15 +1,26 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { CharacterProfile, PhoneEvidence, PhoneCustomApp } from '../types';
 import { ContextBuilder } from '../utils/context';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
+import MeituanTakeoutCard from '../components/chat/cards/phone/MeituanTakeoutCard';
+
+// 朋友圈封面背景图池 —— 每次进入随机选一张
+const MOMENTS_BG_POOL = [
+    'https://i.postimg.cc/FKHSBpn0/Camera-1040g3k031roibveui4405pjvpo8gu1m2pj5m6bg.jpg',
+    'https://i.postimg.cc/0NySBnHp/Camera-XHS-17719469368011040g2sg31dsqqr5ngccg5o6it4n098c9sr3goe0.jpg',
+    'https://i.postimg.cc/W41ZH8fG/Camera-XHS-17719472040941040g2sg31enohhbkmi7g5pu896g399ls9l2jb1o.jpg',
+    'https://i.postimg.cc/5yYqkgjj/Camera-XHS-17719473891901040g00831dne1qidge305o3i8irg8p0lbup6im0.jpg',
+    'https://i.postimg.cc/prhY1Crw/Camera-XHS-17719479279871040g2sg30ttugsjr4m605ojdbvn8d1ctvlghth8.jpg',
+    'https://i.postimg.cc/rs0CYjzK/mmexport1771947836221.jpg',
+];
 
 // --- Debug Component ---
 const LayoutInspector: React.FC = () => {
     const [stats, setStats] = useState({ w: 0, h: 0, vh: 0, top: 0 });
-    
+
     useEffect(() => {
         const update = () => {
             setStats({
@@ -32,7 +43,7 @@ const LayoutInspector: React.FC = () => {
 
     return (
         <div className="absolute top-0 right-0 z-[9999] bg-red-500/80 text-white text-[10px] font-mono p-1 pointer-events-none select-none">
-            Win: {stats.w}x{stats.h}<br/>
+            Win: {stats.w}x{stats.h}<br />
             VV: {stats.vh.toFixed(0)} (y:{stats.top.toFixed(0)})
         </div>
     );
@@ -42,14 +53,14 @@ const CheckPhone: React.FC = () => {
     const { closeApp, characters, activeCharacterId, updateCharacter, apiConfig, addToast, userProfile } = useOS();
     const [view, setView] = useState<'select' | 'phone'>('select');
     // activeAppId: 'home' | 'chat_detail' | 'app_id'
-    const [activeAppId, setActiveAppId] = useState<string>('home'); 
+    const [activeAppId, setActiveAppId] = useState<string>('home');
     const [targetChar, setTargetChar] = useState<CharacterProfile | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    
+
     // Chat Detail State
     const [selectedChatRecord, setSelectedChatRecord] = useState<PhoneEvidence | null>(null);
     const chatEndRef = useRef<HTMLDivElement>(null);
-    
+
     // Custom App Creation State
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newAppName, setNewAppName] = useState('');
@@ -84,6 +95,11 @@ const CheckPhone: React.FC = () => {
         window.scrollTo(0, 0);
     }, [activeAppId, view]);
 
+    // 朋友圈封面：每次组件挂载随机选一张背景
+    const momentsCoverBg = useMemo(() =>
+        MOMENTS_BG_POOL[Math.floor(Math.random() * MOMENTS_BG_POOL.length)],
+        []);
+
     // Auto scroll to bottom of chat detail
     // NOTE: Do NOT use scrollIntoView - it propagates to page scroll on mobile, shifting the entire layout up
     useEffect(() => {
@@ -109,10 +125,10 @@ const CheckPhone: React.FC = () => {
 
     const handleDeleteRecord = async (record: PhoneEvidence) => {
         if (!targetChar) return;
-        
+
         const newRecords = (targetChar.phoneState?.records || []).filter(r => r.id !== record.id);
-        updateCharacter(targetChar.id, { 
-            phoneState: { ...targetChar.phoneState, records: newRecords } 
+        updateCharacter(targetChar.id, {
+            phoneState: { ...targetChar.phoneState, records: newRecords }
         });
 
         if (record.systemMessageId) {
@@ -138,7 +154,7 @@ const CheckPhone: React.FC = () => {
 
     const handleCreateCustomApp = () => {
         if (!targetChar || !newAppName || !newAppPrompt) return;
-        
+
         const newApp: PhoneCustomApp = {
             id: `app-${Date.now()}`,
             name: newAppName,
@@ -186,7 +202,7 @@ const CheckPhone: React.FC = () => {
             // Include full memory details for accuracy
             const context = ContextBuilder.buildCoreContext(targetChar, userProfile, true);
             const msgs = await DB.getMessagesByCharId(targetChar.id);
-            
+
             const lastMsg = msgs[msgs.length - 1];
             const timeGap = getTimeGapHint(lastMsg?.timestamp);
 
@@ -221,12 +237,22 @@ const CheckPhone: React.FC = () => {
     格式JSON数组: [{ "title": "联系人名称", "value": "呼入 (5分钟) / 未接 / 呼出 (30秒)", "detail": "关于下周聚会的事..." }, ...]`;
                     logPrefix = "通话记录";
                 } else if (type === 'order') {
-                    promptInstruction = `生成 3 条该角色最近的购物订单。
-    格式JSON数组: [{ "title": "商品名", "detail": "状态" }, ...]`;
+                    promptInstruction = `生成 3 条该角色最近的购物订单（淘宝/天猫）。
+    要求：
+    1. 商品名必须具体、生动，包含品牌名和型号（例如 "NIKE Air Max 270 黑白配色 男款"）。
+    2. detail 必须包含 "规格 | 状态" 两部分，用 "|" 分隔（例如 "黑色/42码 | 已发货"）。
+    3. value 是实付款金额，必须带 ¥ 前缀。
+    4. shop 是店铺名（例如 "Nike官方旗舰店"）。
+    格式JSON数组: [{ "title": "商品名", "detail": "规格 | 状态", "value": "¥金额", "shop": "店铺名" }, ...]`;
                     logPrefix = "购物APP";
                 } else if (type === 'delivery') {
-                    promptInstruction = `生成 3 条该角色最近的外卖记录。
-    格式JSON数组: [{ "title": "店名", "detail": "菜品" }, ...]`;
+                    promptInstruction = `生成 3 条该角色最近的美团外卖订单记录。
+    要求：
+    1. title 是商家名称（例如 "华莱士(高新店)"、"蜜雪冰城(大学路店)"、"张亮麻辣烫"）。
+    2. detail 是点的菜品列表，用「;」分隔，包含数量（例如 "蜜汁手扒鸡×1;可乐×2;薯条（大份）×1"）。
+    3. value 是订单总价，必须带 ¥ 前缀（例如 "¥45.8"）。
+    4. shop 是订单状态（例如 "已完成"、"骑手正在配送"、"已取消"）。
+    格式JSON数组: [{ "title": "商家名", "detail": "菜品1×数量;菜品2×数量;...", "value": "¥总价", "shop": "订单状态" }, ...]`;
                     logPrefix = "外卖APP";
                 } else if (type === 'social') {
                     promptInstruction = `生成 2 条该角色的朋友圈/社交媒体动态。
@@ -254,7 +280,7 @@ const CheckPhone: React.FC = () => {
             const firstBracket = content.indexOf('[');
             const lastBracket = content.lastIndexOf(']');
             if (firstBracket > -1 && lastBracket > -1) content = content.substring(firstBracket, lastBracket + 1);
-            
+
             let json = [];
             try { json = JSON.parse(content); } catch (e) { json = []; }
 
@@ -264,35 +290,47 @@ const CheckPhone: React.FC = () => {
                 for (const item of json) {
                     const recordTitle = item.title || 'Unknown';
                     const recordDetail = item.detail || '...';
-                    
+
                     let sysMsgContent = "";
                     if (type === 'chat') {
                         sysMsgContent = `[系统: ${targetChar.name} 与 "${recordTitle}" 的聊天记录-内容涉及: ${recordDetail.replace(/\n/g, ' ')}]`;
                     } else {
                         sysMsgContent = `[系统: ${targetChar.name}的手机(${logPrefix}) 显示: ${recordTitle} - ${recordDetail}]`;
                     }
-                    
+
                     await DB.saveMessage({
                         charId: targetChar.id,
                         role: 'system',
                         type: 'text',
-                        content: sysMsgContent
+                        content: sysMsgContent,
+                        metadata: {
+                            source: 'phone',
+                            phoneType: type,
+                            phoneLabel: logPrefix || type,
+                            phoneTitle: recordTitle,
+                            phoneDetail: recordDetail,
+                            phoneValue: item.value || null,
+                            phoneShop: item.shop || null,
+                            charName: targetChar.name,
+                            charAvatar: targetChar.avatar
+                        }
                     });
-                    
+
                     const currentMsgs = await DB.getMessagesByCharId(targetChar.id);
                     const savedMsg = currentMsgs[currentMsgs.length - 1];
-                    
+
                     newRecordsToAdd.push({
                         id: `rec-${Date.now()}-${Math.random()}`,
-                        type: type, 
+                        type: type,
                         title: recordTitle,
                         detail: recordDetail,
                         value: item.value,
+                        shop: item.shop,
                         timestamp: Date.now(),
-                        systemMessageId: savedMsg?.id 
+                        systemMessageId: savedMsg?.id
                     });
-                    
-                    await new Promise(r => setTimeout(r, 50)); 
+
+                    await new Promise(r => setTimeout(r, 50));
                 }
             }
 
@@ -349,13 +387,13 @@ Format:
             if (response.ok) {
                 const data = await safeResponseJson(response);
                 let newLines = data.choices[0].message.content.trim();
-                
+
                 // Clean up any markdown
                 newLines = newLines.replace(/```/g, '');
 
                 // Append to existing record
                 const updatedDetail = `${selectedChatRecord.detail}\n${newLines}`;
-                
+
                 // Update Local State
                 const updatedRecord = { ...selectedChatRecord, detail: updatedDetail };
                 setSelectedChatRecord(updatedRecord);
@@ -366,9 +404,32 @@ Format:
                 updateCharacter(targetChar.id, {
                     phoneState: { ...targetChar.phoneState, records: updatedRecords }
                 });
-                
-                // Note: We deliberately do NOT add a system message to the main chat context here.
-                // This is "pure viewing" mode.
+
+                // Inject a system message so the chat timeline (and AI context) reflects the continuation
+                const continuationSummary = newLines.replace(/\n/g, ' ').substring(0, 80);
+                await DB.saveMessage({
+                    charId: targetChar.id,
+                    role: 'system',
+                    type: 'text',
+                    content: `[系统: ${userProfile.name} 偷看了 ${targetChar.name} 与 "${selectedChatRecord.title}" 的后续对话: ${continuationSummary}...]`,
+                    metadata: {
+                        source: 'phone',
+                        phoneType: 'chat',
+                        phoneLabel: '聊天软件',
+                        phoneTitle: selectedChatRecord.title,
+                        phoneDetail: newLines,
+                        charName: targetChar.name
+                    }
+                });
+
+                // Also update the original system message's metadata if it exists
+                if (selectedChatRecord.systemMessageId) {
+                    try {
+                        await DB.updateMessageMetadata(selectedChatRecord.systemMessageId, {
+                            phoneDetail: updatedDetail
+                        });
+                    } catch (e) { /* Original message may have been deleted, safe to ignore */ }
+                }
             }
 
         } catch (e) {
@@ -394,15 +455,15 @@ Format:
     );
 
     const renderChatList = () => {
-        const list = records.filter(r => r.type === 'chat').sort((a,b) => b.timestamp - a.timestamp);
+        const list = records.filter(r => r.type === 'chat').sort((a, b) => b.timestamp - a.timestamp);
         return (
             <div className="absolute inset-0 w-full h-full flex flex-col bg-slate-50 z-10">
                 {renderHeader('Message', () => setActiveAppId('home'))}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar pb-24 overscroll-contain">
                     {list.length === 0 && <div className="text-center text-slate-400 mt-20 text-xs">暂无聊天记录</div>}
                     {list.map(r => (
-                        <div 
-                            key={r.id} 
+                        <div
+                            key={r.id}
                             onClick={() => { setSelectedChatRecord(r); setActiveAppId('chat_detail'); }}
                             className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 relative group animate-slide-up active:scale-98 transition-transform cursor-pointer"
                         >
@@ -413,7 +474,7 @@ Format:
                                 <div className="flex-1 min-w-0">
                                     <div className="flex justify-between items-baseline mb-1">
                                         <div className="font-bold text-slate-700 text-sm truncate">{r.title}</div>
-                                        <div className="text-[10px] text-slate-400">{new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
+                                        <div className="text-[10px] text-slate-400">{new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                     </div>
                                     <div className="text-xs text-slate-500 truncate">
                                         {r.detail.split('\n').pop() || '...'}
@@ -433,69 +494,69 @@ Format:
         );
     };
 
-  const renderChatDetail = () => {
-    if (!selectedChatRecord || !targetChar) return null;
+    const renderChatDetail = () => {
+        if (!selectedChatRecord || !targetChar) return null;
 
-    // Parse logic: look for "Me:" or "我:" vs others
-    const lines = selectedChatRecord.detail.split('\n').filter(l => l.trim());
-    const parsedLines = lines.map(line => {
-        const isMe = line.startsWith('我') || line.startsWith('Me') || line.startsWith('Me:') || line.startsWith('我:');
-        const content = line.replace(/^(我|Me|对方|Them|[\w\u4e00-\u9fa5]+)[:：]\s*/, '');
-        return { isMe, content };
-    });
+        // Parse logic: look for "Me:" or "我:" vs others
+        const lines = selectedChatRecord.detail.split('\n').filter(l => l.trim());
+        const parsedLines = lines.map(line => {
+            const isMe = line.startsWith('我') || line.startsWith('Me') || line.startsWith('Me:') || line.startsWith('我:');
+            const content = line.replace(/^(我|Me|对方|Them|[\w\u4e00-\u9fa5]+)[:：]\s*/, '');
+            return { isMe, content };
+        });
 
-    return (
-        // 关键修复：添加不透明背景色，确保完全覆盖
-      <div className="absolute inset-0 w-full h-full flex flex-col bg-[#f2f2f2] z-[100] overflow-hidden">
-            {renderHeader(selectedChatRecord.title, () => setActiveAppId('chat'))}
-            
-            {/* 聊天内容区域 */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar overscroll-contain min-h-0">
-                {parsedLines.map((msg, idx) => (
-                    <div key={idx} className={`flex ${msg.isMe ? 'justify-end' : 'justify-start'}`}>
-                        {!msg.isMe && (
-                            <div className="w-9 h-9 rounded-md bg-gray-300 flex items-center justify-center text-xs text-gray-500 mr-2 shrink-0">
-                                {selectedChatRecord.title[0]}
+        return (
+            // 关键修复：添加不透明背景色，确保完全覆盖
+            <div className="absolute inset-0 w-full h-full flex flex-col bg-[#f2f2f2] z-[100] overflow-hidden">
+                {renderHeader(selectedChatRecord.title, () => setActiveAppId('chat'))}
+
+                {/* 聊天内容区域 */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar overscroll-contain min-h-0">
+                    {parsedLines.map((msg, idx) => (
+                        <div key={idx} className={`flex ${msg.isMe ? 'justify-end' : 'justify-start'}`}>
+                            {!msg.isMe && (
+                                <div className="w-9 h-9 rounded-md bg-gray-300 flex items-center justify-center text-xs text-gray-500 mr-2 shrink-0">
+                                    {selectedChatRecord.title[0]}
+                                </div>
+                            )}
+                            <div className={`px-3 py-2 rounded-lg max-w-[75%] text-sm leading-relaxed shadow-sm break-words relative ${msg.isMe ? 'bg-[#95ec69] text-black' : 'bg-white text-black'}`}>
+                                {msg.isMe && <div className="absolute top-2 -right-1.5 w-3 h-3 bg-[#95ec69] rotate-45"></div>}
+                                {!msg.isMe && <div className="absolute top-3 -left-1 w-2.5 h-2.5 bg-white rotate-45"></div>}
+                                <span className="relative z-10">{msg.content}</span>
                             </div>
-                        )}
-                        <div className={`px-3 py-2 rounded-lg max-w-[75%] text-sm leading-relaxed shadow-sm break-words relative ${msg.isMe ? 'bg-[#95ec69] text-black' : 'bg-white text-black'}`}>
-                            {msg.isMe && <div className="absolute top-2 -right-1.5 w-3 h-3 bg-[#95ec69] rotate-45"></div>}
-                            {!msg.isMe && <div className="absolute top-3 -left-1 w-2.5 h-2.5 bg-white rotate-45"></div>}
-                            <span className="relative z-10">{msg.content}</span>
+                            {msg.isMe && (
+                                <img src={targetChar.avatar} className="w-9 h-9 rounded-md object-cover ml-2 shrink-0 shadow-sm" />
+                            )}
                         </div>
-                        {msg.isMe && (
-                            <img src={targetChar.avatar} className="w-9 h-9 rounded-md object-cover ml-2 shrink-0 shadow-sm" />
-                        )}
-                    </div>
-                ))}
-                {isLoading && (
-                    <div className="flex justify-center py-4">
-                        <div className="flex gap-1">
-                            <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"></div>
-                            <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce delay-100"></div>
-                            <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce delay-200"></div>
+                    ))}
+                    {isLoading && (
+                        <div className="flex justify-center py-4">
+                            <div className="flex gap-1">
+                                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"></div>
+                                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce delay-100"></div>
+                                <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce delay-200"></div>
+                            </div>
                         </div>
-                    </div>
-                )}
-                <div ref={chatEndRef} />
-            </div>
+                    )}
+                    <div ref={chatEndRef} />
+                </div>
 
-            {/* 底部按钮 - 关键修复：移除复杂的 env() 计算，使用固定 padding */}
-            <div className="shrink-0 w-full p-4 bg-[#f7f7f7] border-t border-gray-200">
-                <button 
-                    onClick={handleContinueChat} 
-                    disabled={isLoading}
-                    className="w-full py-3 bg-white border border-gray-300 rounded-xl text-sm font-bold text-slate-600 shadow-sm active:bg-gray-50 transition-colors flex items-center justify-center gap-2"
-                >
-                    {isLoading ? '对方正在输入...' : '👀 偷看后续 / 拱火'}
-                </button>
+                {/* 底部按钮 - 关键修复：移除复杂的 env() 计算，使用固定 padding */}
+                <div className="shrink-0 w-full p-4 bg-[#f7f7f7] border-t border-gray-200">
+                    <button
+                        onClick={handleContinueChat}
+                        disabled={isLoading}
+                        className="w-full py-3 bg-white border border-gray-300 rounded-xl text-sm font-bold text-slate-600 shadow-sm active:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+                    >
+                        {isLoading ? '对方正在输入...' : '👀 偷看后续 / 拱火'}
+                    </button>
+                </div>
             </div>
-        </div>
-    );
-};
+        );
+    };
 
     const renderCallList = () => {
-        const list = records.filter(r => r.type === 'call').sort((a,b) => b.timestamp - a.timestamp);
+        const list = records.filter(r => r.type === 'call').sort((a, b) => b.timestamp - a.timestamp);
         return (
             <div className="absolute inset-0 w-full h-full flex flex-col bg-white z-10">
                 {renderHeader('Recents', () => setActiveAppId('home'))}
@@ -517,7 +578,7 @@ Format:
                                     </div>
                                     {r.detail && <div className="text-[10px] text-slate-500 mt-1 italic truncate">"{r.detail}"</div>}
                                 </div>
-                                <div className="text-[10px] text-slate-300">{new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
+                                <div className="text-[10px] text-slate-300">{new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                                 <button onClick={() => handleDeleteRecord(r)} className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 bg-red-100 text-red-500 rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity">×</button>
                             </div>
                         );
@@ -532,13 +593,178 @@ Format:
         );
     };
 
+    // ─── Taobao App List (仿淘宝订单列表) ─────────────────────────
+    const renderTaobaoList = () => {
+        const list = records.filter(r => r.type === 'order').sort((a, b) => b.timestamp - a.timestamp);
+
+        return (
+            <div className="absolute inset-0 w-full h-full flex flex-col bg-[#f5f5f5] z-10">
+                {/* ── Header: Taobao style ── */}
+                <div className="h-14 flex items-center justify-between px-4 shrink-0 z-20"
+                    style={{ background: 'linear-gradient(135deg, #FF5000, #FF2800)' }}>
+                    <button onClick={() => setActiveAppId('home')} className="p-2 -ml-2 rounded-full hover:bg-white/10 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="white" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                        </svg>
+                    </button>
+                    <span className="font-bold text-white text-base tracking-wide">我的订单</span>
+                    <div className="w-8"></div>
+                </div>
+
+                {/* ── Order list ── */}
+                <div className="flex-1 overflow-y-auto no-scrollbar pb-24 overscroll-contain">
+                    {list.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
+                            <span className="text-4xl opacity-20">📦</span>
+                            <span className="text-xs">暂无订单</span>
+                        </div>
+                    )}
+                    <div className="p-3 space-y-2.5">
+                        {list.map(r => {
+                            // Parse "规格 | 状态"
+                            const detailParts = (r.detail || '').split(/[|｜]/).map(s => s.trim()).filter(Boolean);
+                            const spec = detailParts.length > 1 ? detailParts[0] : '';
+                            const status = detailParts.length > 1 ? detailParts.slice(1).join(' · ') : r.detail;
+
+                            const statusColor = status.includes('已完成') || status.includes('已签收') || status.includes('交易成功')
+                                ? 'text-green-600'
+                                : status.includes('已发货') || status.includes('运输中')
+                                    ? 'text-orange-500'
+                                    : status.includes('待付款')
+                                        ? 'text-red-500'
+                                        : 'text-slate-500';
+
+                            return (
+                                <div key={r.id} className="bg-white rounded-lg overflow-hidden relative group animate-slide-up" style={{ border: '1px solid #f0f0f0' }}>
+                                    {/* Shop header */}
+                                    <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid #f5f5f5' }}>
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-4 h-4 rounded flex items-center justify-center text-[8px] font-black text-white shrink-0"
+                                                style={{ background: 'linear-gradient(135deg, #FF5000, #FF2800)' }}>
+                                                淘
+                                            </div>
+                                            <span className="text-[11px] text-slate-600 font-medium truncate max-w-[150px]">
+                                                {r.shop || '淘宝商家'}
+                                            </span>
+                                        </div>
+                                        <span className={`text-[10px] font-medium ${statusColor}`}>{status}</span>
+                                    </div>
+
+                                    {/* Product row */}
+                                    <div className="px-3 py-2.5 flex gap-3">
+                                        {/* Image placeholder */}
+                                        <div className="w-20 h-20 rounded-md shrink-0 flex items-center justify-center"
+                                            style={{ background: '#f7f7f7' }}>
+                                            <span className="text-2xl text-slate-300 select-none">
+                                                {(r.title || '?')[0]}
+                                            </span>
+                                        </div>
+                                        {/* Info */}
+                                        <div className="flex-1 min-w-0 flex flex-col justify-between">
+                                            <div className="text-[13px] text-slate-800 font-medium leading-snug line-clamp-2">
+                                                {r.title}
+                                            </div>
+                                            {spec && (
+                                                <div className="text-[11px] text-slate-400 mt-0.5 truncate">{spec}</div>
+                                            )}
+                                            <div className="flex items-center justify-end mt-1">
+                                                {r.value && (
+                                                    <span className="text-[14px] font-bold" style={{ color: '#FF5000' }}>
+                                                        {(r.value.startsWith('¥') || r.value.startsWith('￥')) ? r.value : `¥${r.value}`}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Delete */}
+                                    <button onClick={() => handleDeleteRecord(r)} className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity shadow-md z-10">×</button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* ── Refresh button ── */}
+                <div className="absolute bottom-8 w-full flex justify-center pointer-events-none z-30">
+                    <button
+                        disabled={isLoading}
+                        onClick={() => handleGenerate('order')}
+                        className="pointer-events-auto text-white px-6 py-2.5 rounded-full shadow-xl font-bold text-xs flex items-center gap-2 active:scale-95 transition-transform"
+                        style={{ background: 'linear-gradient(135deg, #FF5000, #FF2800)' }}
+                    >
+                        {isLoading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>}
+                        刷新订单
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    // ─── Meituan Waimai App List (仿美团外卖订单列表) ─────────────────────
+    const renderMeituanList = () => {
+        const list = records.filter(r => r.type === 'delivery').sort((a, b) => b.timestamp - a.timestamp);
+
+        return (
+            <div className="absolute inset-0 w-full h-full flex flex-col bg-[#f5f5f5] z-10">
+                {/* ── Header: Meituan style ── */}
+                <div className="h-14 flex items-center justify-between px-4 shrink-0 z-20"
+                    style={{ background: 'linear-gradient(135deg, #FFD000, #FFC300)' }}>
+                    <button onClick={() => setActiveAppId('home')} className="p-2 -ml-2 rounded-full hover:bg-black/10 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="#111" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                        </svg>
+                    </button>
+                    <span className="font-bold text-[#111] text-base tracking-wide">美团外卖</span>
+                    <div className="w-8"></div>
+                </div>
+
+                {/* ── Order list ── */}
+                <div className="flex-1 overflow-y-auto no-scrollbar pb-24 overscroll-contain">
+                    {list.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
+                            <span className="text-4xl opacity-20">🍔</span>
+                            <span className="text-xs">暂无外卖订单</span>
+                        </div>
+                    )}
+                    <div className="p-3 space-y-2.5">
+                        {list.map(r => (
+                            <div key={r.id} className="relative group animate-slide-up">
+                                <MeituanTakeoutCard
+                                    title={r.title}
+                                    detail={r.detail}
+                                    value={r.value}
+                                    shop={r.shop}
+                                />
+                                <button onClick={() => handleDeleteRecord(r)} className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity shadow-md z-10">×</button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* ── Refresh button ── */}
+                <div className="absolute bottom-8 w-full flex justify-center pointer-events-none z-30">
+                    <button
+                        disabled={isLoading}
+                        onClick={() => handleGenerate('delivery')}
+                        className="pointer-events-auto text-[#111] px-6 py-2.5 rounded-full shadow-xl font-bold text-xs flex items-center gap-2 active:scale-95 transition-transform"
+                        style={{ background: 'linear-gradient(135deg, #FFD000, #FFC300)' }}
+                    >
+                        {isLoading ? <div className="w-3 h-3 border-2 border-[#111]/30 border-t-[#111] rounded-full animate-spin"></div> : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>}
+                        刷新订单
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
     const renderGenericList = (appId: string, appName: string, customPrompt?: string) => {
-        const list = records.filter(r => r.type === appId).sort((a,b) => b.timestamp - a.timestamp);
-        
+        const list = records.filter(r => r.type === appId).sort((a, b) => b.timestamp - a.timestamp);
+
         return (
             <div className="absolute inset-0 w-full h-full flex flex-col bg-slate-50 z-10">
                 {renderHeader(appName, () => setActiveAppId('home'))}
-                
+
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar pb-24 overscroll-contain">
                     {list.length === 0 && (
                         <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
@@ -553,17 +779,17 @@ Format:
                                 {r.value && <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded">{r.value}</span>}
                             </div>
                             <div className="text-xs text-slate-500 leading-relaxed">{r.detail}</div>
-                            <div className="text-[10px] text-slate-300 mt-2 text-right">{new Date(r.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
-                            
+                            <div className="text-[10px] text-slate-300 mt-2 text-right">{new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+
                             <button onClick={() => handleDeleteRecord(r)} className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity shadow-md">×</button>
                         </div>
                     ))}
                 </div>
 
                 <div className="absolute bottom-8 w-full flex justify-center pointer-events-none z-30">
-                    <button 
-                        disabled={isLoading} 
-                        onClick={() => handleGenerate(appId, customPrompt)} 
+                    <button
+                        disabled={isLoading}
+                        onClick={() => handleGenerate(appId, customPrompt)}
                         className="pointer-events-auto bg-slate-800 text-white px-6 py-2.5 rounded-full shadow-xl font-bold text-xs flex items-center gap-2 active:scale-95 transition-transform hover:bg-slate-700"
                     >
                         {isLoading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>}
@@ -574,9 +800,102 @@ Format:
         );
     };
 
+    const renderMomentsList = () => {
+        const list = records.filter(r => r.type === 'social').sort((a, b) => b.timestamp - a.timestamp);
+
+        return (
+            <div className="absolute inset-0 w-full h-full flex flex-col bg-white z-10">
+                {/* WeChat Header */}
+                <div className="h-14 flex items-center justify-between px-4 bg-white/90 backdrop-blur-md text-[#111111] shrink-0 z-20 border-b border-gray-100">
+                    <button onClick={() => setActiveAppId('home')} className="p-2 -ml-2 rounded-full active:bg-gray-100 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                        </svg>
+                    </button>
+                    <span className="font-medium text-base tracking-wide">朋友圈</span>
+                    <button className="p-2 -mr-2 rounded-full active:bg-gray-100 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.64-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.232 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Z" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto no-scrollbar pb-24 overscroll-contain bg-white">
+                    {/* Moments Cover Image Area */}
+                    <div className="h-64 bg-gray-100 relative mb-12">
+                        <img src={targetChar?.dateBackground || momentsCoverBg} className="w-full h-full object-cover" />
+                        <div className="absolute -bottom-8 right-4 flex items-end gap-4">
+                            <span className="text-white text-lg font-bold drop-shadow-md mb-2">{targetChar?.name}</span>
+                            <div className="w-16 h-16 rounded-lg bg-gray-200 p-[2px] bg-white shadow-sm shrink-0">
+                                {targetChar?.avatar ? (
+                                    <img src={targetChar.avatar} className="w-full h-full object-cover rounded-md" />
+                                ) : (
+                                    <div className="w-full h-full bg-slate-300 rounded-md"></div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {list.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-40 text-slate-400 gap-2">
+                            <span className="text-sm">暂无动态</span>
+                        </div>
+                    )}
+
+                    {/* Moments List */}
+                    <div className="divide-y divide-gray-100">
+                        {list.map(r => (
+                            <div key={r.id} className="p-4 flex gap-3 relative group animate-slide-up bg-white">
+                                {/* Avatar */}
+                                <div className="w-10 h-10 rounded-md shrink-0 bg-gray-200">
+                                    {targetChar?.avatar ? (
+                                        <img src={targetChar.avatar} className="w-full h-full rounded-md object-cover" />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-gray-500 font-medium">{(targetChar?.name || '?')[0]}</div>
+                                    )}
+                                </div>
+
+                                {/* Content */}
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-[#576b95] font-medium text-[15px] mb-1 leading-tight">{targetChar?.name}</div>
+                                    <div className="text-[#111111] text-[15px] leading-relaxed whitespace-pre-wrap break-words">{r.detail}</div>
+
+                                    <div className="flex items-center justify-between mt-2.5">
+                                        <div className="text-[#b2b2b2] text-[13px] flex items-center gap-2">
+                                            <span>{r.title}</span>
+                                            <button onClick={() => handleDeleteRecord(r)} className="text-[#576b95] opacity-0 group-hover:opacity-100 transition-opacity">删除</button>
+                                        </div>
+                                        <div className="w-8 h-5 bg-[#f5f5f5] rounded flex items-center justify-center cursor-pointer active:bg-gray-200 transition-colors">
+                                            <div className="flex gap-1">
+                                                <span className="w-1 h-1 rounded-full bg-[#576b95]"></span>
+                                                <span className="w-1 h-1 rounded-full bg-[#576b95]"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="absolute bottom-6 w-full flex justify-center pointer-events-none z-30">
+                    <button
+                        disabled={isLoading}
+                        onClick={() => handleGenerate('social')}
+                        className="pointer-events-auto bg-green-500 text-white px-6 py-2.5 rounded-full shadow-lg font-bold text-xs flex items-center gap-2 active:scale-95 transition-transform"
+                    >
+                        {isLoading ? <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>}
+                        刷新朋友圈
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
     const AppIcon = ({ icon, color, label, onClick, onDelete }: { icon: string, color: string, label: string, onClick: () => void, onDelete?: () => void }) => (
         <div className="flex flex-col items-center gap-1.5 relative group">
-            <button 
+            <button
                 onClick={onClick}
                 className="w-[3.8rem] h-[3.8rem] rounded-[1.2rem] flex items-center justify-center text-2xl shadow-lg border border-white/10 active:scale-95 transition-transform relative overflow-hidden"
                 style={{ background: color }}
@@ -592,14 +911,14 @@ Format:
     );
 
     const renderDesktop = () => {
-        const bgStyle = targetChar?.dateBackground 
+        const bgStyle = targetChar?.dateBackground
             ? { backgroundImage: `url(${targetChar.dateBackground})` }
             : { background: 'linear-gradient(to bottom, #1e293b, #0f172a)' };
 
         return (
             <div className="absolute inset-0 flex flex-col z-0" style={{ ...bgStyle, backgroundSize: 'cover', backgroundPosition: 'center' }}>
                 <div className="absolute inset-0 bg-black/20 backdrop-blur-[2px]"></div>
-                
+
                 <div className="h-8 flex justify-between px-5 items-center text-white/80 text-[10px] font-bold z-20 relative">
                     <span>12:00</span>
                     <div className="flex gap-1.5 items-center">
@@ -614,14 +933,14 @@ Format:
                         <AppIcon icon="🛍️" color="linear-gradient(135deg, #f97316, #ea580c)" label="Taobao" onClick={() => setActiveAppId('taobao')} />
                         <AppIcon icon="🍔" color="linear-gradient(135deg, #eab308, #ca8a04)" label="Food" onClick={() => setActiveAppId('waimai')} />
                         <AppIcon icon="⭕" color="linear-gradient(135deg, #6366f1, #4f46e5)" label="Moments" onClick={() => setActiveAppId('social')} />
-                        
+
                         {customApps.map(app => (
-                            <AppIcon 
-                                key={app.id} 
-                                icon={app.icon} 
-                                color={app.color} 
-                                label={app.name} 
-                                onClick={() => setActiveAppId(app.id)} 
+                            <AppIcon
+                                key={app.id}
+                                icon={app.icon}
+                                color={app.color}
+                                label={app.name}
+                                onClick={() => setActiveAppId(app.id)}
                                 onDelete={() => handleDeleteApp(app.id)}
                             />
                         ))}
@@ -653,10 +972,10 @@ Format:
 
                 <div className="p-4 z-20">
                     <div className="bg-white/20 backdrop-blur-xl rounded-[2rem] p-3 flex justify-around items-center border border-white/10 shadow-lg">
-                        <button onClick={() => {}} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center text-2xl shadow-sm">📞</div></button>
+                        <button onClick={() => { }} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center text-2xl shadow-sm">📞</div></button>
                         <button onClick={() => setActiveAppId('chat')} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-2xl shadow-sm">💬</div></button>
-                        <button onClick={() => {}} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-2xl shadow-sm">🧭</div></button>
-                        <button onClick={() => {}} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center text-2xl shadow-sm">⚙️</div></button>
+                        <button onClick={() => { }} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-2xl shadow-sm">🧭</div></button>
+                        <button onClick={() => { }} className="p-2 rounded-xl active:bg-white/20 transition-colors"><div className="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center text-2xl shadow-sm">⚙️</div></button>
                     </div>
                 </div>
             </div>
@@ -682,8 +1001,8 @@ Format:
                             <div className="text-center">
                                 <div className="font-bold text-slate-300 text-sm group-hover:text-green-400">{c.name}</div>
                                 <div className="text-[10px] text-slate-500 font-mono mt-1">
-  CONNECT &gt;
-</div>
+                                    CONNECT &gt;
+                                </div>
                             </div>
                         </div>
                     ))}
@@ -701,10 +1020,10 @@ Format:
                 <>
                     {activeAppId === 'chat' && renderChatList()}
                     {activeAppId === 'chat_detail' && renderChatDetail()}
-                    {activeAppId === 'taobao' && renderGenericList('order', 'Taobao')}
-                    {activeAppId === 'waimai' && renderGenericList('delivery', 'Food Delivery')}
-                    {activeAppId === 'social' && renderGenericList('social', 'Moments')}
-                    
+                    {activeAppId === 'taobao' && renderTaobaoList()}
+                    {activeAppId === 'waimai' && renderMeituanList()}
+                    {activeAppId === 'social' && renderMomentsList()}
+
                     {/* Render Custom Apps */}
                     {customApps.find(a => a.id === activeAppId) && (
                         (() => {
@@ -732,10 +1051,10 @@ Format:
                     </div>
                     <div>
                         <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">功能指令 (AI Prompt)</label>
-                        <textarea 
-                            value={newAppPrompt} 
-                            onChange={e => setNewAppPrompt(e.target.value)} 
-                            placeholder="例如: 显示该用户的存款余额、近期的转账记录以及理财收益。" 
+                        <textarea
+                            value={newAppPrompt}
+                            onChange={e => setNewAppPrompt(e.target.value)}
+                            placeholder="例如: 显示该用户的存款余额、近期的转账记录以及理财收益。"
                             className="w-full h-24 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs resize-none"
                         />
                         <p className="text-[9px] text-slate-400 mt-1">AI 将根据此指令生成该 App 内部的数据。</p>
