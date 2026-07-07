@@ -33,8 +33,8 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     rollupOptions: {
-      // 关键修复：将这些包排除在打包之外，让浏览器通过 index.html 的 importmap 加载
-      external: ['pdfjs-dist', 'katex', 'jszip']
+      // 救援模式：jszip 改为本地打包（导出功能不能依赖外部 CDN）；其余仍走 importmap
+      external: ['pdfjs-dist', 'katex']
     }
   }
 });
